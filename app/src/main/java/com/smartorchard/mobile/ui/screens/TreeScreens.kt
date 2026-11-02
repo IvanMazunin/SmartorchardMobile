@@ -15,16 +15,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.smartorchard.mobile.R
 import com.smartorchard.mobile.data.*
 import com.smartorchard.mobile.domain.*
 import com.smartorchard.mobile.state.OrchardViewModel
+import com.smartorchard.mobile.state.UiState
 import com.smartorchard.mobile.ui.*
 import com.smartorchard.mobile.ui.theme.*
 
-@Composable fun TreeScreen(vm: OrchardViewModel, data: AppData) {
+@Composable fun TreeScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
     var notes by remember { mutableStateOf(false) }; var note by rememberSaveable { mutableStateOf("") }
-    BackLink("Доска сада") { vm.go(Screen.BOARD) }
+    BackLink("Доска сада") { navController.popBackStack() }
     Text("ПАСПОРТ РАСТЕНИЯ", style = MaterialTheme.typography.labelSmall, color = OrchardMuted)
     ScreenTitle("Дерево ${treeCode(vm.crop, vm.tree)}", "${vm.garden.name} · ряд ${vm.tree.row} · место ${vm.tree.place}")
     StatusBadge(vm.tree.status)
@@ -36,17 +38,17 @@ import com.smartorchard.mobile.ui.theme.*
         Detail("Последний осмотр", vm.records.firstOrNull()?.createdAt?.let(::prettyTimestamp) ?: "Нет сохраненных осмотров")
     }
     PrimaryButton("Новый осмотр", R.drawable.ic_camera) { vm.beginInspection() }
-    SecondaryButton("Печать QR", R.drawable.ic_printer) { vm.go(Screen.LABEL) }
+    SecondaryButton("Печать QR", R.drawable.ic_printer) { navController.navigate(Route.LABEL) }
     val latest = vm.records.firstOrNull()
     if (!latest?.diagnosis.isNullOrBlank()) OrchardCard {
         SectionLabel("Последний сохраненный осмотр"); Text(latest.diagnosis, style = MaterialTheme.typography.titleMedium)
         Text(latest.recommendations, color = OrchardMuted)
-        TextButton({ vm.selectedObservationId = latest.id; vm.go(Screen.OBSERVATION_DETAIL) }) { Text("Открыть осмотр"); OrchardIcon(R.drawable.ic_arrow_up_right) }
+        TextButton({ vm.updateSelectedObservationId(latest.id); vm.navigateTo(Route.OBSERVATION_DETAIL) }) { Text("Открыть осмотр"); OrchardIcon(R.drawable.ic_arrow_up_right) }
     } else InfoBox("ИИ-диагностика по фото: проверьте предполагаемый диагноз и рекомендации, внесите правки и сохраните для дерева.", R.drawable.ic_scan_eye)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!notes, { notes = false }, { Text("История") }); FilterChip(notes, { notes = true }, { Text("Заметки") }) }
     if (!notes) {
         if (vm.records.isEmpty()) Text("История осмотров пока пуста. Новый осмотр появится после сохранения.", color = OrchardMuted)
-        vm.records.forEach { record -> OrchardCard(Modifier.clickable { vm.selectedObservationId = record.id; vm.go(Screen.OBSERVATION_DETAIL) }) {
+        vm.records.forEach { record -> OrchardCard(Modifier.clickable { vm.updateSelectedObservationId(record.id); vm.navigateTo(Route.OBSERVATION_DETAIL) }) {
             Text(prettyTimestamp(record.createdAt), color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
             Text(record.diagnosis.ifBlank { "Осмотр дерева" }, style = MaterialTheme.typography.titleMedium); StatusBadge(record.status)
         } }
@@ -55,20 +57,20 @@ import com.smartorchard.mobile.ui.theme.*
         if (list.isEmpty()) Text("Заметок пока нет.", color = OrchardMuted)
         list.forEach { item -> OrchardCard { Text(item.text); Text(prettyTimestamp(item.createdAt), color = OrchardMuted, style = MaterialTheme.typography.bodyMedium) } }
         Field("Новая заметка", note, { note = it.take(2000) }, lines = 3)
-        ErrorBox(vm.error)
-        SecondaryButton("Добавить заметку", enabled = !vm.busy) { vm.addNote(note); if (note.isNotBlank()) note = "" }
+        ErrorBox(ui.error)
+        SecondaryButton("Добавить заметку", enabled = !ui.busy) { vm.addNote(note); if (note.isNotBlank()) note = "" }
     }
 }
 
-@Composable fun ObservationFormScreen(vm: OrchardViewModel) {
-    val draft = vm.inspection ?: return
+@Composable fun ObservationFormScreen(vm: OrchardViewModel, ui: UiState, navController: NavController) {
+    val draft = ui.inspection ?: return
     var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> if (uri != null) vm.importPhoto(uri) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success -> if (success) cameraUri?.let { vm.importPhoto(Uri.parse(it)) } }
     val context = LocalContext.current
     fun launchCamera() { runCatching { val uri = vm.cameraUri(); cameraUri = uri.toString(); camera.launch(uri) }.onFailure { vm.fail("Камера недоступна. Выберите фотографию из файлов.") } }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) launchCamera() else vm.fail("Разрешение на камеру не выдано. Выберите фото из файлов.") }
-    BackLink("Паспорт дерева") { vm.go(Screen.TREE) }
+    BackLink("Паспорт дерева") { navController.popBackStack() }
     Text("${treeCode(vm.crop, vm.tree)} · ряд ${vm.tree.row}, место ${vm.tree.place}", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
     ScreenTitle("Новый осмотр", "Фото и наблюдения о выбранном дереве")
     PhotoPreview(draft.photoPath, draft.samplePhoto)
@@ -80,17 +82,17 @@ import com.smartorchard.mobile.ui.theme.*
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera() else permission.launch(Manifest.permission.CAMERA)
     }
     Text("JPEG / PNG до 10 МБ. Выбранная фотография сохраняется на устройстве.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    Field("Наблюдение", draft.comment, { vm.inspection = draft.copy(comment = it.take(3000)); vm.clearFormError() }, lines = 3, placeholder = "Что вы заметили при осмотре?")
-    DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.inspection = draft.copy(status = it); vm.clearFormError() }
+    Field("Наблюдение", draft.comment, { vm.updateInspection(draft.copy(comment = it.take(3000))); vm.clearFormError() }, lines = 3, placeholder = "Что вы заметили при осмотре?")
+    DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.updateInspection(draft.copy(status = it)); vm.clearFormError() }
     Text("По умолчанию — прошлое состояние: ${draft.previousStatus.label}.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
     InfoBox("Демо ИИ: приложение покажет пример предполагаемого диагноза и рекомендаций. Их можно изменить перед сохранением.", R.drawable.ic_scan_eye)
-    ErrorBox(vm.error)
-    PrimaryButton("Отправить фото на анализ", R.drawable.ic_sparkles, !vm.busy) { vm.analyze() }
-    SecondaryButton("Сохранить осмотр без ИИ", enabled = !vm.busy) { vm.saveInspection(false) }
+    ErrorBox(ui.error)
+    PrimaryButton("Отправить фото на анализ", R.drawable.ic_sparkles, !ui.busy) { vm.analyze() }
+    SecondaryButton("Сохранить осмотр без ИИ", enabled = !ui.busy) { vm.saveInspection(false) }
 }
 
-@Composable fun AnalysisScreen(vm: OrchardViewModel) {
-    val draft = vm.inspection ?: return
+@Composable fun AnalysisScreen(vm: OrchardViewModel, ui: UiState, navController: NavController) {
+    val draft = ui.inspection ?: return
     BackLink("К осмотру") { vm.backToInspection() }
     DemoBadge("Демо ИИ")
     ScreenTitle(if (draft.phase == AnalysisPhase.PROCESSING) "Анализ фотографии" else "Результат анализа", treeCode(vm.crop, vm.tree))
@@ -99,20 +101,20 @@ import com.smartorchard.mobile.ui.theme.*
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp); Text("Анализируем фотографию…") }
         Text("Показывается демонстрационный ответ. Осмотр пока не сохранен, состояние дерева не меняется.", color = OrchardMuted)
     } else {
-        Field("Предполагаемый диагноз", draft.diagnosis, { vm.inspection = draft.copy(diagnosis = it.take(500)); vm.clearFormError() }, lines = 2)
-        Field("Рекомендации", draft.recommendations, { vm.inspection = draft.copy(recommendations = it.take(3000)); vm.clearFormError() }, lines = 4)
-        DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.inspection = draft.copy(status = it) }
+        Field("Предполагаемый диагноз", draft.diagnosis, { vm.updateInspection(draft.copy(diagnosis = it.take(500))); vm.clearFormError() }, lines = 2)
+        Field("Рекомендации", draft.recommendations, { vm.updateInspection(draft.copy(recommendations = it.take(3000))); vm.clearFormError() }, lines = 4)
+        DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.updateInspection(draft.copy(status = it)) }
         Text("Ответ ИИ не переключает состояние автоматически. По умолчанию использовано прошлое значение.", color = OrchardMuted)
         var original by remember { mutableStateOf(false) }
         TextButton({ original = !original }) { Text(if (original) "Скрыть исходный ответ ИИ" else "Исходный ответ ИИ") }
         if (original) OrchardCard { Text(draft.originalAi?.diagnosis.orEmpty(), style = MaterialTheme.typography.titleMedium); Text(draft.originalAi?.recommendations.orEmpty()) }
-        ErrorBox(vm.error)
-        PrimaryButton("Сохранить для дерева", R.drawable.ic_save, !vm.busy) { vm.saveInspection(true) }
+        ErrorBox(ui.error)
+        PrimaryButton("Сохранить для дерева", R.drawable.ic_save, !ui.busy) { vm.saveInspection(true) }
     }
 }
 
-@Composable fun ObservationDetailScreen(vm: OrchardViewModel, data: AppData) {
-    val record = data.observations.find { it.id == vm.selectedObservationId } ?: return
+@Composable fun ObservationDetailScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
+    val record = data.observations.find { it.id == ui.selectedObservationId } ?: return
     BackLink("Паспорт дерева") { vm.openTree(record.treeId) }
     ScreenTitle("Осмотр дерева", prettyTimestamp(record.createdAt))
     StatusBadge(record.status)

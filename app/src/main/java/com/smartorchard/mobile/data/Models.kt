@@ -27,9 +27,29 @@ enum class TreeStatus(val label: String) {
     val zones: List<IrrigationZone> = emptyList(), val schedules: List<IrrigationSchedule> = emptyList(), val expenses: List<Expense> = emptyList(),
     val observations: List<Observation> = emptyList(), val notes: List<TreeNote> = emptyList(), val printer: DemoPrinter = DemoPrinter())
 
-enum class Screen {
-    BOARD, GARDENS, NEW_GARDEN, CROPS, NEW_CROP, TREE, OBSERVE, RESULT, OBSERVATION_DETAIL,
-    IRRIGATION, ZONES, ZONE_EDITOR, ZONE_DETAIL, SCHEDULE, EXPENSES, NEW_EXPENSE, ECONOMICS, SCAN, LABEL, PRINTER, MORE, STORAGE
+object Route {
+    const val BOARD = "board"
+    const val GARDENS = "gardens"
+    const val NEW_GARDEN = "new_garden"
+    const val CROPS = "crops"
+    const val NEW_CROP = "new_crop"
+    const val TREE = "tree"
+    const val OBSERVE = "observe"
+    const val RESULT = "result"
+    const val OBSERVATION_DETAIL = "observation_detail"
+    const val IRRIGATION = "irrigation"
+    const val ZONES = "zones"
+    const val ZONE_EDITOR = "zone_editor"
+    const val ZONE_DETAIL = "zone_detail"
+    const val SCHEDULE = "schedule"
+    const val EXPENSES = "expenses"
+    const val NEW_EXPENSE = "new_expense"
+    const val ECONOMICS = "economics"
+    const val SCAN = "scan"
+    const val LABEL = "label"
+    const val PRINTER = "printer"
+    const val MORE = "more"
+    const val STORAGE = "storage"
 }
 data class GardenDraft(val name: String = "", val cropId: String = "", val areaHa: String = "", val date: String = "2026-10-29", val places: String = "5", val placesManual: Boolean = false)
 data class CropDraft(val name: String = "", val variety: String = "", val row: String = "", val tree: String = "")

@@ -19,20 +19,21 @@ import androidx.compose.ui.unit.sp
 import com.smartorchard.mobile.R
 import com.smartorchard.mobile.data.*
 import com.smartorchard.mobile.state.OrchardViewModel
+import com.smartorchard.mobile.state.UiState
 import com.smartorchard.mobile.ui.theme.*
 
 enum class GridMode { HEALTH, ZONES, EDIT_ZONE, VIEW_ZONE }
 
-@Composable fun GardenGrid(vm: OrchardViewModel, data: AppData, mode: GridMode = GridMode.HEALTH) {
+@Composable fun GardenGrid(vm: OrchardViewModel, data: AppData, ui: UiState, mode: GridMode = GridMode.HEALTH) {
     val garden = vm.garden
     val ownPaging = mode == GridMode.EDIT_ZONE || mode == GridMode.VIEW_ZONE
     var localRow by remember(garden.id) { mutableStateOf(0) }
     var localColumn by remember(garden.id) { mutableStateOf(0) }
-    val rp = (if (ownPaging) localRow else vm.rowPage).coerceIn(0, (garden.rows - 1) / 4)
-    val cp = (if (ownPaging) localColumn else vm.colPage).coerceIn(0, (garden.placesPerRow - 1) / 6)
+    val rp = (if (ownPaging) localRow else ui.rowPage).coerceIn(0, (garden.rows - 1) / 4)
+    val cp = (if (ownPaging) localColumn else ui.colPage).coerceIn(0, (garden.placesPerRow - 1) / 6)
     val r1 = rp * 4 + 1; val r2 = minOf(r1 + 3, garden.rows)
     val p1 = cp * 6 + 1; val p2 = minOf(p1 + 5, garden.placesPerRow)
-    fun page(row: Int = rp, col: Int = cp) { if (ownPaging) { localRow = row; localColumn = col } else { vm.rowPage = row; vm.colPage = col } }
+    fun page(row: Int = rp, col: Int = cp) { if (ownPaging) { localRow = row; localColumn = col } else { vm.updateRowPage(row); vm.updateColPage(col) } }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Ряды $r1–$r2 · места $p1–$p2", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = OrchardMuted)
@@ -46,24 +47,24 @@ enum class GridMode { HEALTH, ZONES, EDIT_ZONE, VIEW_ZONE }
                     val tree = garden.trees.find { it.row == r && it.place == p }
                     if (tree == null) { Spacer(Modifier.weight(1f).height(42.dp)); continue }
                     val owner = vm.zoneOf(tree.id)
-                    val blocked = mode == GridMode.EDIT_ZONE && owner != null && owner.id != vm.zoneDraft.id
+                    val blocked = mode == GridMode.EDIT_ZONE && owner != null && owner.id != ui.zoneDraft.id
                     val picked = when (mode) {
-                        GridMode.EDIT_ZONE -> tree.id in vm.zoneDraft.treeIds
+                        GridMode.EDIT_ZONE -> tree.id in ui.zoneDraft.treeIds
                         GridMode.VIEW_ZONE -> tree.id in (vm.currentZone()?.treeIds ?: emptyList())
                         else -> tree.id == vm.tree.id
                     }
-                    val dim = mode == GridMode.HEALTH && vm.filter != null && tree.status != vm.filter
+                    val dim = mode == GridMode.HEALTH && ui.filter != null && tree.status != ui.filter
                     val colors = statusColors(tree.status)
                     val background = when (mode) {
                         GridMode.HEALTH -> colors.first
                         GridMode.ZONES -> owner?.let { ZoneColors[it.color % 3] } ?: Color(0xFFF0F2EB)
-                        GridMode.EDIT_ZONE -> if (picked) ZoneColors[vm.zoneDraft.color % 3] else Color(0xFFF0F2EB)
+                        GridMode.EDIT_ZONE -> if (picked) ZoneColors[ui.zoneDraft.color % 3] else Color(0xFFF0F2EB)
                         GridMode.VIEW_ZONE -> if (picked) ZoneColors[(vm.currentZone()?.color ?: 0) % 3] else Color(0xFFF0F2EB)
                     }
                     Box(Modifier.weight(1f).height(42.dp)
                         .background(background.copy(alpha = if (dim || blocked) .4f else 1f), RoundedCornerShape(9.dp))
                         .border(if (picked) 2.dp else 1.dp, if (picked) OrchardGreen else OrchardLine, RoundedCornerShape(9.dp))
-                        .clickable(enabled = !dim && !blocked && mode != GridMode.VIEW_ZONE) { if (mode == GridMode.EDIT_ZONE) vm.toggleZoneCell(tree.id) else vm.selectedTreeId = tree.id }
+                        .clickable(enabled = !dim && !blocked && mode != GridMode.VIEW_ZONE) { if (mode == GridMode.EDIT_ZONE) vm.toggleZoneCell(tree.id) else vm.updateSelectedTreeId(tree.id) }
                         .semantics { contentDescription = "Ряд $r, место $p, ${tree.status.label}${if (blocked) ", занято другой зоной" else ""}${if (vm.watering(owner)) ", действует демополив" else ""}" }, contentAlignment = Alignment.Center) {
                         Text(p.toString().padStart(2, '0'), fontSize = 11.sp, color = if (mode == GridMode.HEALTH) colors.second.copy(alpha = if (dim) .35f else 1f) else OrchardGreen)
                         if (vm.watering(owner)) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp).fillMaxWidth(.65f).height(3.dp).background(WaterBlue, RoundedCornerShape(2.dp)))

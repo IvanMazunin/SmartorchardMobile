@@ -8,35 +8,37 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.smartorchard.mobile.R
 import com.smartorchard.mobile.data.*
 import com.smartorchard.mobile.domain.*
 import com.smartorchard.mobile.state.OrchardViewModel
+import com.smartorchard.mobile.state.UiState
 import com.smartorchard.mobile.ui.*
 import com.smartorchard.mobile.ui.theme.*
 
-@Composable fun BoardScreen(vm: OrchardViewModel, data: AppData) {
-    TextButton({ vm.go(Screen.GARDENS) }, contentPadding = PaddingValues(0.dp)) { Text(vm.garden.name); OrchardIcon(R.drawable.ic_chevron_down) }
+@Composable fun BoardScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
+    TextButton({ navController.navigate(Route.GARDENS) }, contentPadding = PaddingValues(0.dp)) { Text(vm.garden.name); OrchardIcon(R.drawable.ic_chevron_down) }
     ScreenTitle("Доска сада", "${vm.crop.name} · ${vm.crop.variety} · ${number(vm.garden.areaHa.toBigDecimal())} га")
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        FilterChip(!vm.boardZones, { vm.boardZones = false }, { Text("Состояния") })
-        FilterChip(vm.boardZones, { vm.boardZones = true }, { Text("Зоны полива") })
+        FilterChip(!ui.boardZones, { vm.updateBoardZones(false) }, { Text("Состояния") })
+        FilterChip(ui.boardZones, { vm.updateBoardZones(true) }, { Text("Зоны полива") })
     }
     if (vm.zones.any { vm.watering(it) }) InfoBox("Демо: сейчас действует полив. Маркеры показаны только у деревьев активной зоны.", R.drawable.ic_droplets)
-    if (vm.boardZones) {
+    if (ui.boardZones) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Зоны из отдельных клеток", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = OrchardMuted)
-            TextButton({ vm.go(Screen.ZONES) }) { Text("Все зоны"); OrchardIcon(R.drawable.ic_chevron_right, Modifier.size(15.dp)) }
+            TextButton({ navController.navigate(Route.ZONES) }) { Text("Все зоны"); OrchardIcon(R.drawable.ic_chevron_right, Modifier.size(15.dp)) }
         }
         SecondaryButton("Создать зону", R.drawable.ic_plus) { vm.beginZone() }
     } else Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(null to "Все", TreeStatus.WARNING to "Есть отклонения", TreeStatus.UNKNOWN to "Без осмотра").forEach { (status, label) ->
-            FilterChip(vm.filter == status, { vm.filter = status }, { Text(label, style = MaterialTheme.typography.labelSmall) })
+            FilterChip(ui.filter == status, { vm.updateFilter(status) }, { Text(label, style = MaterialTheme.typography.labelSmall) })
         }
     }
-    GardenGrid(vm, data, if (vm.boardZones) GridMode.ZONES else GridMode.HEALTH)
+    GardenGrid(vm, data, ui, if (ui.boardZones) GridMode.ZONES else GridMode.HEALTH)
     Text("Синяя полоса — действует демополив", color = WaterBlue, style = MaterialTheme.typography.bodyMedium)
-    if (!vm.boardZones) StatusLegend(vm.garden) else vm.zones.forEach { zone -> TextButton({ vm.selectedZoneId = zone.id; vm.go(Screen.ZONE_DETAIL) }) { Text("${zone.name} · ${zone.treeIds.size} деревьев") } }
+    if (!ui.boardZones) StatusLegend(vm.garden) else vm.zones.forEach { zone -> TextButton({ vm.updateSelectedZoneId(zone.id); vm.navigateTo(Route.ZONE_DETAIL) }) { Text("${zone.name} · ${zone.treeIds.size} деревьев") } }
     OrchardCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Дерево ${treeCode(vm.crop, vm.tree)}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); StatusBadge(vm.tree.status) }
         Text("Ряд ${vm.tree.row} · место ${vm.tree.place}", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
@@ -44,7 +46,7 @@ import com.smartorchard.mobile.ui.theme.*
     }
 }
 
-@Composable fun GardensScreen(vm: OrchardViewModel, data: AppData) {
+@Composable fun GardensScreen(vm: OrchardViewModel, data: AppData, navController: NavController) {
     ScreenTitle("Мои сады", "Создание и выбор сада")
     PrimaryButton("Новый сад", R.drawable.ic_plus) { vm.beginGarden() }
     data.gardens.forEach { garden ->
@@ -59,10 +61,10 @@ import com.smartorchard.mobile.ui.theme.*
     }
 }
 
-@Composable fun NewGardenScreen(vm: OrchardViewModel, data: AppData) {
-    BackLink("Мои сады") { vm.go(Screen.GARDENS) }
+@Composable fun NewGardenScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
+    BackLink("Мои сады") { navController.popBackStack() }
     ScreenTitle("Новый сад", "Культура, схема посадки и структура сада")
-    val draft = vm.gardenDraft; val crop = data.crops.first { it.id == draft.cropId }
+    val draft = ui.gardenDraft; val crop = data.crops.first { it.id == draft.cropId }
     val estimate = plantingEstimate(draft.areaHa, crop); val places = draft.places.toIntOrNull()
     Field("Название сада", draft.name, { vm.updateGardenDraft(draft.copy(name = it.take(80))) }, placeholder = "Например, Восточный сад")
     DropdownField("Культура и сорт", draft.cropId, data.crops.map { it.id to (it.name + if (it.variety.isNotBlank()) " · ${it.variety}" else "") }) { vm.updateGardenDraft(draft.copy(cropId = it)) }
@@ -86,12 +88,12 @@ import com.smartorchard.mobile.ui.theme.*
     Field("Дата посадки · ГГГГ-ММ-ДД", draft.date, { vm.updateGardenDraft(draft.copy(date = it)) })
     Field("Мест в полном ряду", draft.places, { vm.updateGardenDraft(draft.copy(places = it, placesManual = true)) }, numeric = true)
     Text("Число деревьев округляется вниз. Пустые места последнего ряда не создают деревья или QR.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    ErrorBox(vm.error)
-    PrimaryButton("Создать сад", R.drawable.ic_arrow_right, !vm.busy) { vm.saveGarden() }
+    ErrorBox(ui.error)
+    PrimaryButton("Создать сад", R.drawable.ic_arrow_right, !ui.busy) { vm.saveGarden() }
 }
 
-@Composable fun CropsScreen(vm: OrchardViewModel, data: AppData) {
-    BackLink("Ещё") { vm.go(Screen.MORE) }
+@Composable fun CropsScreen(vm: OrchardViewModel, data: AppData, navController: NavController) {
+    BackLink("Ещё") { navController.popBackStack() }
     ScreenTitle("Культуры", "Сорта и схемы посадки")
     PrimaryButton("Создать культуру", R.drawable.ic_plus) { vm.beginCrop(false) }
     data.crops.forEach { crop -> OrchardCard {
@@ -99,17 +101,17 @@ import com.smartorchard.mobile.ui.theme.*
         Detail("Между рядами", "${crop.rowSpacing} м"); Detail("Между деревьями", "${crop.treeSpacing} м")
     } }
 }
-@Composable fun NewCropScreen(vm: OrchardViewModel) {
-    BackLink(if (vm.cropReturnToGarden) "Новый сад" else "Культуры") { vm.cancelCrop() }
+@Composable fun NewCropScreen(vm: OrchardViewModel, ui: UiState, navController: NavController) {
+    BackLink(if (ui.cropReturnToGarden) "Новый сад" else "Культуры") { vm.cancelCrop() }
     ScreenTitle("Новая культура", "Название, сорт и схема посадки")
-    val draft = vm.cropDraft
-    Field("Культура", draft.name, { vm.cropDraft = draft.copy(name = it.take(60)); vm.clearFormError() }, placeholder = "Например, Вишня")
-    Field("Сорт", draft.variety, { vm.cropDraft = draft.copy(variety = it.take(60)); vm.clearFormError() }, placeholder = "Необязательно")
+    val draft = ui.cropDraft
+    Field("Культура", draft.name, { vm.updateCropDraft(draft.copy(name = it.take(60))); vm.clearFormError() }, placeholder = "Например, Вишня")
+    Field("Сорт", draft.variety, { vm.updateCropDraft(draft.copy(variety = it.take(60))); vm.clearFormError() }, placeholder = "Необязательно")
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Field("Между рядами, м", draft.row, { vm.cropDraft = draft.copy(row = it); vm.clearFormError() }, Modifier.weight(1f), numeric = true)
-        Field("Между деревьями, м", draft.tree, { vm.cropDraft = draft.copy(tree = it); vm.clearFormError() }, Modifier.weight(1f), numeric = true)
+        Field("Между рядами, м", draft.row, { vm.updateCropDraft(draft.copy(row = it)); vm.clearFormError() }, Modifier.weight(1f), numeric = true)
+        Field("Между деревьями, м", draft.tree, { vm.updateCropDraft(draft.copy(tree = it)); vm.clearFormError() }, Modifier.weight(1f), numeric = true)
     }
     Text("Оба расстояния должны быть больше нуля, до трех знаков после запятой. Схема используется при создании сада.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    ErrorBox(vm.error)
-    PrimaryButton("Создать культуру", enabled = !vm.busy) { vm.saveCrop() }
+    ErrorBox(ui.error)
+    PrimaryButton("Создать культуру", enabled = !ui.busy) { vm.saveCrop() }
 }
