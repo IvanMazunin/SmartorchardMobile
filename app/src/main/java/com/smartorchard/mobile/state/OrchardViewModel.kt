@@ -48,12 +48,12 @@ sealed class NavigationEvent {
 
 @HiltViewModel
 class OrchardViewModel @Inject constructor(
-    private val repository: MockRepository,
+    private val repository: OrchardRepository,
     private val diagnosisService: DiagnosisService,
     private val photos: PhotoStore
 ) : ViewModel() {
 
-    val appData: StateFlow<AppData> = repository.state
+    val appData: StateFlow<AppData> = repository.data
 
     private val _uiState = MutableStateFlow(UiState(
         gardenDraft = GardenDraft(cropId = appData.value.crops.first().id)
@@ -119,16 +119,16 @@ class OrchardViewModel @Inject constructor(
     fun watering(zone: IrrigationZone?) = zone != null && schedules.any { it.zoneId == zone.id && ui.previewAt >= it.start && ui.previewAt < it.end }
     fun currentZone() = zones.find { it.id == ui.selectedZoneId } ?: zones.firstOrNull()
 
-    private fun save(success: String? = null, transform: (AppData) -> AppData, after: () -> Unit = {}) {
+    private fun execute(success: String? = null, action: suspend () -> Unit, after: () -> Unit = {}) {
         if (ui.busy) return
         _uiState.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
-            try { repository.update(transform); after(); if (success != null) notify(success) }
-            catch (exception: Exception) { fail(exception.message ?: "Не удалось сохранить данные на устройстве.") }
+            try { action(); after(); if (success != null) notify(success) }
+            catch (exception: Exception) { fail(exception.message ?: "Не удалось сохранить данные.") }
             finally { _uiState.update { it.copy(busy = false) } }
         }
     }
-    fun chooseGarden(id: String) = save(transform = { it.copy(currentGardenId = id) }) {
+    fun chooseGarden(id: String) = execute(action = { repository.setCurrentGarden(id) }) {
         _uiState.update { it.copy(selectedTreeId = null, rowPage = 0, colPage = 0, boardZones = false, filter = null) }
         navigateTo(Route.BOARD)
     }
@@ -141,7 +141,7 @@ class OrchardViewModel @Inject constructor(
         if (decimal(d.row, 3)?.let { it > BigDecimal.ZERO } != true || decimal(d.tree, 3)?.let { it > BigDecimal.ZERO } != true) return fail("Укажите положительные расстояния, до трех знаков после запятой.")
         val item = Crop(uid(), d.name.trim(), d.variety.trim(), d.row.trim().replace(',', '.'), d.tree.trim().replace(',', '.'), mapOf("Миндаль" to "МД", "Яблоня" to "ЯБ", "Груша" to "ГР")[d.name.trim()] ?: "СД")
         if (data.crops.any { sameCrop(it, item) }) return fail("Такая культура с этим сортом и схемой посадки уже есть.")
-        save("Культура создана", { it.copy(crops = it.crops + item) }) {
+        execute("Культура создана", { repository.addCrop(item) }) {
             if (ui.cropReturnToGarden) _uiState.update { it.copy(gardenDraft = it.gardenDraft.copy(cropId = item.id)) }
             cancelCrop()
         }
@@ -155,7 +155,7 @@ class OrchardViewModel @Inject constructor(
         if (p == null || p !in 1..minOf(100, estimate.count) || (estimate.count + p - 1) / p > 100) return fail("Задайте до 100 мест в полном ряду и не более 100 рядов.")
         if (!validDate(d.date) || d.date > DEMO_DATE) return fail("Укажите дату посадки не позже 29 октября 2026.")
         val item = newGarden(d.name, chosen, d.areaHa, d.date, p)
-        save("Сад создан · ${item.trees.size} деревьев", { it.copy(gardens = it.gardens + item, currentGardenId = item.id) }) {
+        execute("Сад создан · ${item.trees.size} деревьев", { repository.addGarden(item) }) {
             _uiState.update { it.copy(selectedTreeId = item.trees.first().id, rowPage = 0, colPage = 0, filter = null, boardZones = false) }
             navigateTo(Route.BOARD)
         }
@@ -182,33 +182,33 @@ class OrchardViewModel @Inject constructor(
         if (zones.any { it.id != d.id && normalized(it.name) == normalized(d.name) }) return fail("Зона с таким названием уже есть.")
         if (d.treeIds.any { id -> garden.trees.none { it.id == id } || zones.any { it.id != d.id && id in it.treeIds } }) return fail("Некоторые деревья недоступны или заняты другой зоной.")
         val item = IrrigationZone(d.id ?: uid(), garden.id, d.name.trim(), d.color, d.treeIds)
-        save("Зона сохранена", { it.copy(zones = it.zones.filterNot { z -> z.id == item.id } + item) }) { _uiState.update { it.copy(selectedZoneId = item.id, boardZones = true) }; navigateTo(Route.ZONE_DETAIL) }
+        execute("Зона сохранена", { repository.saveZone(item) }) { _uiState.update { it.copy(selectedZoneId = item.id, boardZones = true) }; navigateTo(Route.ZONE_DETAIL) }
     }
     fun saveSchedule(zoneId: String, start: String, end: String) {
         if (zones.none { it.id == zoneId }) return fail("Выберите зону полива.")
         if (!validDateTime(start) || !validDateTime(end) || start >= end) return fail("Окончание должно быть позже начала.")
         if (schedules.any { it.zoneId == zoneId && overlaps(start, end, it) }) return fail("В этой зоне уже есть пересекающийся интервал.")
         val item = IrrigationSchedule(uid(), garden.id, zoneId, start, end)
-        save("Интервал добавлен", { it.copy(schedules = it.schedules + item) }) { navigateTo(Route.IRRIGATION) }
+        execute("Интервал добавлен", { repository.addSchedule(item) }) { navigateTo(Route.IRRIGATION) }
     }
-    fun deleteSchedule(id: String) = save("Интервал удален", { it.copy(schedules = it.schedules.filterNot { s -> s.id == id }) })
+    fun deleteSchedule(id: String) = execute("Интервал удален", { repository.deleteSchedule(id) })
     fun saveExpense(title: String, category: String, quantity: String, unit: String, price: String, date: String) {
         if (title.isBlank() || unit.isBlank()) return fail("Укажите наименование и единицу измерения.")
         val cents = expenseCents(quantity, price) ?: return fail("Количество должно быть положительным, цена — неотрицательной.")
         if (!validDate(date) || date > DEMO_DATE) return fail("Укажите дату расхода не позже 29 октября 2026.")
         val item = Expense(uid(), garden.id, title.trim(), category, quantity, unit.trim(), price, cents, date)
-        save("Затрата сохранена", { it.copy(expenses = it.expenses + item) }) { navigateTo(Route.EXPENSES) }
+        execute("Затрата сохранена", { repository.addExpense(item) }) { navigateTo(Route.EXPENSES) }
     }
     fun saveFinance(revenue: String, annualRevenue: String, annualCosts: String) {
         val values = listOf(revenue, annualRevenue, annualCosts).map { decimal(it, 2)?.movePointRight(2)?.let { n -> runCatching { n.longValueExact() }.getOrNull() } }
         if (values.any { it == null || it > 100_000_000_000_000L }) return fail("Введите неотрицательные суммы до двух знаков после запятой.")
         val f = Finance(values[0]!!, values[1]!!, values[2]!!); val id = garden.id
-        save("Сценарный расчет обновлен", { it.copy(gardens = it.gardens.map { g -> if (g.id == id) g.copy(finance = f) else g }) })
+        execute("Сценарный расчет обновлен", { repository.updateGardenFinance(id, f) })
     }
     fun addNote(text: String) {
         if (text.isBlank()) return fail("Введите текст заметки.")
         val item = TreeNote(uid(), tree.id, text.trim(), OffsetDateTime.now().toString())
-        save("Заметка добавлена", { it.copy(notes = it.notes + item) })
+        execute("Заметка добавлена", { repository.addNote(item) })
     }
     fun beginInspection() {
         analysisJob?.cancel()
@@ -250,8 +250,7 @@ class OrchardViewModel @Inject constructor(
         if (!withAi && d.comment.isBlank() && d.photoPath == null && !d.samplePhoto && d.status == d.previousStatus) return fail("Добавьте фото, наблюдение или измените состояние.")
         val record = Observation(uid(), garden.id, d.treeId, OffsetDateTime.now().toString(), d.status, d.comment.trim(),
             if (withAi) d.diagnosis.trim() else "", if (withAi) d.recommendations.trim() else "", d.photoPath, d.samplePhoto, if (withAi) d.originalAi else null)
-        save("Осмотр сохранен для дерева", { current -> current.copy(observations = current.observations + record,
-            gardens = current.gardens.map { g -> if (g.id == garden.id) g.copy(trees = g.trees.map { t -> if (t.id == originalTree.id) t.copy(status = d.status) else t }) else g }) }) {
+        execute("Осмотр сохранен для дерева", { repository.addObservation(record, garden.id, originalTree.id, d.status) }) {
             _uiState.update { it.copy(selectedTreeId = d.treeId, inspection = null) }; navigateTo(Route.TREE)
         }
     }
@@ -262,15 +261,15 @@ class OrchardViewModel @Inject constructor(
     fun openQr(value: String) {
         val id = parseQr(value) ?: return fail("Некорректная метка SmartOrchard.")
         val g = data.gardens.find { garden -> garden.trees.any { it.id == id } } ?: return fail("Дерево не найдено в локальном наборе данных.")
-        save(transform = { it.copy(currentGardenId = g.id) }) { openTree(id) }
+        execute(action = { repository.setCurrentGarden(g.id) }) { openTree(id) }
     }
     fun searchPrinters() {
         if (ui.printerSearching) return
         _uiState.update { it.copy(printerSearching = true, error = null) }
         viewModelScope.launch { delay(700.milliseconds); _uiState.update { it.copy(printerSearching = false, printerSearched = true) }; notify("Найдены демонстрационные устройства") }
     }
-    fun connectPrinter(name: String) = save("Подключен демопринтер", { it.copy(printer = DemoPrinter(name)) })
-    fun disconnectPrinter() = save("Демопринтер отключен", { it.copy(printer = DemoPrinter()) })
+    fun connectPrinter(name: String) = execute("Подключен демопринтер", { repository.updatePrinter(DemoPrinter(name)) })
+    fun disconnectPrinter() = execute("Демопринтер отключен", { repository.updatePrinter(DemoPrinter()) })
     fun demoPrint() {
         val count = ui.copies.toIntOrNull()
         if (count == null || count !in 1..12) return fail("Укажите от 1 до 12 копий.")
