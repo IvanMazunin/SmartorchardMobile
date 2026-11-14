@@ -1,11 +1,11 @@
 package com.smartorchard.mobile.di
 
-import android.content.Context
-import com.smartorchard.mobile.data.MockRepository
+import com.smartorchard.mobile.data.OfflineFirstRepository
 import com.smartorchard.mobile.data.OrchardRepository
 import com.smartorchard.mobile.services.DemoDiagnosisService
 import com.smartorchard.mobile.services.DiagnosisService
 import com.smartorchard.mobile.services.PhotoStore
+import android.content.Context
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -18,13 +18,13 @@ import javax.inject.Singleton
 object AppModule {
 
     /**
-     * Источник данных. Для переключения на бэкенд замените на:
-     *   fun provideRepository(remote: RemoteRepository): OrchardRepository = remote
+     * Источник данных с оффлайн-поддержкой (Room).
+     * Для переключения на моки:
+     *   fun provideRepository(context: Context): OrchardRepository = MockRepository(context)
      */
     @Provides
     @Singleton
-    fun provideRepository(@ApplicationContext context: Context): OrchardRepository =
-        MockRepository(context)
+    fun provideRepository(offline: OfflineFirstRepository): OrchardRepository = offline
 
     @Provides
     @Singleton
