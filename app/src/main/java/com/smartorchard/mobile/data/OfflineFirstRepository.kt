@@ -1,54 +1,67 @@
 package com.smartorchard.mobile.data
 
 import com.smartorchard.mobile.data.local.*
+import com.smartorchard.mobile.data.sync.DeleteSchedulePayload
+import com.smartorchard.mobile.data.sync.FinanceSyncPayload
+import com.smartorchard.mobile.data.sync.SettingsSyncPayload
+import com.smartorchard.mobile.data.sync.SyncScheduler
+import com.smartorchard.mobile.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import java.time.Clock
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Offline-first репозиторий: все данные читаются из Room и доступны без интернета.
- * Запись сначала идёт в Room, затем (TODO) синхронизируется с сервером.
- *
- * Для переключения на этот репозиторий в AppModule:
- *   fun provideRepository(offline: OfflineFirstRepository): OrchardRepository = offline
+ * Каждая мутация атомарно сохраняется в Room вместе с записью в очередь sync_outbox,
+ * после чего планируется фоновая отправка через WorkManager (SyncScheduler).
  */
 @Singleton
 class OfflineFirstRepository @Inject constructor(
-    private val dao: OrchardDao
+    private val dao: OrchardDao,
+    private val syncScheduler: SyncScheduler,
+    private val json: Json,
+    private val clock: Clock,
+    @ApplicationScope private val scope: CoroutineScope
 ) : OrchardRepository {
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Начальное значение пока Room не эмитит
     private val emptyData = AppData(crops = emptyList(), gardens = emptyList(), currentGardenId = "")
 
     // Комбинируем все Flow из DAO в единый AppData
-    private val coreFlow: Flow<CoreSnapshot> = combine(
+    private val gardenCoreFlow: Flow<CoreSnapshot> = combine(
         dao.observeCrops(),
         dao.observeGardens(),
+        dao.observeTrees(),
         dao.observeZones(),
-        dao.observeSchedules(),
-        dao.observeExpenses()
-    ) { crops, gardens, zones, schedules, expenses ->
+        dao.observeSchedules()
+    ) { crops, gardens, trees, zones, schedules ->
+        val treesByGarden = trees.groupBy({ it.gardenId }, { it.toDomain() })
+        val treeIdsByZone = trees
+            .filter { it.zoneId != null }
+            .groupBy({ it.zoneId!! }, { it.id })
         CoreSnapshot(
-            crops.map { it.toDomain() },
-            gardens.map { it.toDomain() },
-            zones.map { it.toDomain() },
-            schedules.map { it.toDomain() },
-            expenses.map { it.toDomain() }
+            crops = crops.map { it.toDomain() },
+            gardens = gardens.map { gardenEntity ->
+                gardenEntity.toDomain(treesByGarden[gardenEntity.id].orEmpty())
+            },
+            zones = zones.map { zoneEntity ->
+                zoneEntity.toDomain(treeIdsByZone[zoneEntity.id].orEmpty())
+            },
+            schedules = schedules.map { it.toDomain() }
         )
     }
 
     override val data: StateFlow<AppData> = combine(
-        coreFlow,
+        gardenCoreFlow,
+        dao.observeExpenses(),
         dao.observeObservations(),
         dao.observeNotes(),
         dao.observeSettings()
-    ) { core, observations, notes, settings ->
+    ) { core, expenses, observations, notes, settings ->
         AppData(
             crops = core.crops,
             gardens = core.gardens,
@@ -56,7 +69,7 @@ class OfflineFirstRepository @Inject constructor(
                 ?: core.gardens.firstOrNull()?.id ?: "",
             zones = core.zones,
             schedules = core.schedules,
-            expenses = core.expenses,
+            expenses = expenses.map { it.toDomain() },
             observations = observations.map { it.toDomain() },
             notes = notes.map { it.toDomain() },
             printer = DemoPrinter(settings?.printerDevice)
@@ -71,65 +84,195 @@ class OfflineFirstRepository @Inject constructor(
     private suspend fun seedIfEmpty() {
         if (dao.cropCount() > 0) return
         val seed = SeedData.create()
-        dao.insertCrops(seed.crops.map { it.toEntity() })
-        dao.insertGardens(seed.gardens.map { it.toEntity() })
-        dao.insertZones(seed.zones.map { it.toEntity() })
-        dao.insertSchedules(seed.schedules.map { it.toEntity() })
-        dao.insertExpenses(seed.expenses.map { it.toEntity() })
-        dao.insertSettings(UserSettingsEntity(currentGardenId = seed.currentGardenId))
+        val zoneByTreeId: Map<String, String> = buildMap {
+            seed.zones.forEach { zone ->
+                zone.treeIds.forEach { treeId ->
+                    put(treeId, zone.id)
+                }
+            }
+        }
+        val allTrees = seed.gardens.flatMap { g ->
+            g.trees.map { t -> t.toEntity(g.id, zoneByTreeId[t.id]) }
+        }
+        dao.seedInitialData(
+            crops = seed.crops.map { it.toEntity() },
+            gardens = seed.gardens.map { it.toEntity() },
+            zones = seed.zones.map { it.toEntity() },
+            trees = allTrees,
+            schedules = seed.schedules.map { it.toEntity() },
+            expenses = seed.expenses.map { it.toEntity() },
+            settings = UserSettingsEntity(currentGardenId = seed.currentGardenId)
+        )
     }
+
+    private inline fun <reified T> outboxEntry(
+        entityType: SyncEntityType,
+        entityId: String,
+        operation: SyncOperation,
+        payload: T
+    ): SyncOutboxEntity = SyncOutboxEntity(
+        entityType = entityType,
+        entityId = entityId,
+        operation = operation,
+        payloadJson = json.encodeToString(payload),
+        createdAt = clock.millis()
+    )
 
     override suspend fun setCurrentGarden(gardenId: String) {
         val current = dao.getSettings() ?: UserSettingsEntity()
-        dao.insertSettings(current.copy(currentGardenId = gardenId))
+        val updated = current.copy(currentGardenId = gardenId)
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.SETTINGS,
+            entityId = "user_settings",
+            operation = SyncOperation.UPSERT,
+            payload = SettingsSyncPayload(
+                currentGardenId = updated.currentGardenId,
+                printer = DemoPrinter(updated.printerDevice)
+            )
+        )
+        dao.upsertSettingsWithOutbox(updated, outbox)
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun addCrop(crop: Crop) {
-        dao.insertCrop(crop.toEntity())
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.CROP,
+            entityId = crop.id,
+            operation = SyncOperation.UPSERT,
+            payload = crop
+        )
+        dao.insertCropWithOutbox(crop.toEntity(), outbox)
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun addGarden(garden: Garden) {
-        dao.insertGarden(garden.toEntity())
-        setCurrentGarden(garden.id)
+        val currentPrinter = dao.getSettings()?.printerDevice
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.GARDEN,
+            entityId = garden.id,
+            operation = SyncOperation.UPSERT,
+            payload = garden
+        )
+        dao.insertGardenWithTreesAndOutbox(
+            garden = garden.toEntity(),
+            trees = garden.trees.map { it.toEntity(garden.id) },
+            printerDevice = currentPrinter,
+            outbox = outbox
+        )
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun saveZone(zone: IrrigationZone) {
-        dao.insertZone(zone.toEntity())
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.ZONE,
+            entityId = zone.id,
+            operation = SyncOperation.UPSERT,
+            payload = zone
+        )
+        dao.upsertZoneWithTreesAndOutbox(
+            zone = zone.toEntity(),
+            treeIds = zone.treeIds,
+            outbox = outbox
+        )
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun addSchedule(schedule: IrrigationSchedule) {
-        dao.insertSchedule(schedule.toEntity())
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.SCHEDULE,
+            entityId = schedule.id,
+            operation = SyncOperation.UPSERT,
+            payload = schedule
+        )
+        dao.insertScheduleWithOutbox(schedule.toEntity(), outbox)
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun deleteSchedule(scheduleId: String) {
-        dao.deleteSchedule(scheduleId)
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.SCHEDULE,
+            entityId = scheduleId,
+            operation = SyncOperation.DELETE,
+            payload = DeleteSchedulePayload(scheduleId = scheduleId)
+        )
+        dao.deleteScheduleWithOutbox(scheduleId, outbox)
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun addExpense(expense: Expense) {
-        dao.insertExpense(expense.toEntity())
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.EXPENSE,
+            entityId = expense.id,
+            operation = SyncOperation.UPSERT,
+            payload = expense
+        )
+        dao.insertExpenseWithOutbox(expense.toEntity(), outbox)
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun updateGardenFinance(gardenId: String, finance: Finance) {
-        dao.updateFinance(gardenId, finance.revenueCents, finance.annualRevenueCents, finance.annualCostsCents)
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.FINANCE,
+            entityId = gardenId,
+            operation = SyncOperation.UPSERT,
+            payload = FinanceSyncPayload(gardenId = gardenId, finance = finance)
+        )
+        dao.updateFinanceWithOutbox(
+            gardenId = gardenId,
+            revenueCents = finance.revenueCents,
+            annualRevenueCents = finance.annualRevenueCents,
+            annualCostsCents = finance.annualCostsCents,
+            outbox = outbox
+        )
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun addNote(note: TreeNote) {
-        dao.insertNote(note.toEntity())
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.NOTE,
+            entityId = note.id,
+            operation = SyncOperation.UPSERT,
+            payload = note
+        )
+        dao.insertNoteWithOutbox(note.toEntity(), outbox)
+        syncScheduler.scheduleSync()
     }
 
-    override suspend fun addObservation(observation: Observation, gardenId: String, treeId: String, newStatus: TreeStatus) {
-        dao.insertObservation(observation.toEntity())
-        // Обновляем статус дерева в саду (trees хранятся как JSON в GardenEntity)
-        val entity = dao.getGarden(gardenId) ?: return
-        val updatedTrees = entity.trees.map { t ->
-            if (t.id == treeId) t.copy(status = newStatus) else t
-        }
-        dao.updateGarden(entity.copy(trees = updatedTrees))
+    override suspend fun addObservation(
+        observation: Observation,
+        gardenId: String,
+        treeId: String,
+        newStatus: TreeStatus
+    ) {
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.OBSERVATION,
+            entityId = observation.id,
+            operation = SyncOperation.UPSERT,
+            payload = observation
+        )
+        dao.insertObservationAndUpdateTreeWithOutbox(
+            observation = observation.toEntity(),
+            treeId = treeId,
+            newStatus = newStatus,
+            outbox = outbox
+        )
+        syncScheduler.scheduleSync()
     }
 
     override suspend fun updatePrinter(printer: DemoPrinter) {
         val current = dao.getSettings() ?: UserSettingsEntity()
-        dao.insertSettings(current.copy(printerDevice = printer.device))
+        val updated = current.copy(printerDevice = printer.device)
+        val outbox = outboxEntry(
+            entityType = SyncEntityType.SETTINGS,
+            entityId = "user_settings",
+            operation = SyncOperation.UPSERT,
+            payload = SettingsSyncPayload(
+                currentGardenId = updated.currentGardenId,
+                printer = printer
+            )
+        )
+        dao.upsertSettingsWithOutbox(updated, outbox)
+        syncScheduler.scheduleSync()
     }
 }
 
@@ -138,6 +281,5 @@ private data class CoreSnapshot(
     val crops: List<Crop>,
     val gardens: List<Garden>,
     val zones: List<IrrigationZone>,
-    val schedules: List<IrrigationSchedule>,
-    val expenses: List<Expense>
+    val schedules: List<IrrigationSchedule>
 )

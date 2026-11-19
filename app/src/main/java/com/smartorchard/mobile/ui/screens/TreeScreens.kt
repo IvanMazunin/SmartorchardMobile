@@ -1,129 +1,469 @@
 package com.smartorchard.mobile.ui.screens
 
-import android.net.Uri
 import android.Manifest
 import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
+import androidx.core.content.ContextCompat
 import com.smartorchard.mobile.R
 import com.smartorchard.mobile.data.*
 import com.smartorchard.mobile.domain.*
-import com.smartorchard.mobile.state.OrchardViewModel
-import com.smartorchard.mobile.state.UiState
 import com.smartorchard.mobile.ui.*
 import com.smartorchard.mobile.ui.theme.*
 
-@Composable fun TreeScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
-    var notes by remember { mutableStateOf(false) }; var note by rememberSaveable { mutableStateOf("") }
-    BackLink("Доска сада") { navController.popBackStack() }
-    Text("ПАСПОРТ РАСТЕНИЯ", style = MaterialTheme.typography.labelSmall, color = OrchardMuted)
-    ScreenTitle("Дерево ${treeCode(vm.crop, vm.tree)}", "${vm.garden.name} · ряд ${vm.tree.row} · место ${vm.tree.place}")
-    StatusBadge(vm.tree.status)
-    val zone = vm.zoneOf(vm.tree.id)
-    if (vm.watering(zone)) InfoBox("Демо: действует полив · ${zone?.name}", R.drawable.ic_droplets)
-    OrchardCard {
-        Detail("Культура и сорт", vm.crop.name + if (vm.crop.variety.isNotEmpty()) " · ${vm.crop.variety}" else "")
-        Detail("Год посадки", vm.garden.plantingDate.take(4)); Detail("Зона автополива", zone?.name ?: "Без зоны")
-        Detail("Последний осмотр", vm.records.firstOrNull()?.createdAt?.let(::prettyTimestamp) ?: "Нет сохраненных осмотров")
-    }
-    PrimaryButton("Новый осмотр", R.drawable.ic_camera) { vm.beginInspection() }
-    SecondaryButton("Печать QR", R.drawable.ic_printer) { navController.navigate(Route.LABEL) }
-    val latest = vm.records.firstOrNull()
-    if (!latest?.diagnosis.isNullOrBlank()) OrchardCard {
-        SectionLabel("Последний сохраненный осмотр"); Text(latest.diagnosis, style = MaterialTheme.typography.titleMedium)
-        Text(latest.recommendations, color = OrchardMuted)
-        TextButton({ vm.updateSelectedObservationId(latest.id); vm.navigateTo(Route.OBSERVATION_DETAIL) }) { Text("Открыть осмотр"); OrchardIcon(R.drawable.ic_arrow_up_right) }
-    } else InfoBox("ИИ-диагностика по фото: проверьте предполагаемый диагноз и рекомендации, внесите правки и сохраните для дерева.", R.drawable.ic_scan_eye)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!notes, { notes = false }, { Text("История") }); FilterChip(notes, { notes = true }, { Text("Заметки") }) }
-    if (!notes) {
-        if (vm.records.isEmpty()) Text("История осмотров пока пуста. Новый осмотр появится после сохранения.", color = OrchardMuted)
-        vm.records.forEach { record -> OrchardCard(Modifier.clickable { vm.updateSelectedObservationId(record.id); vm.navigateTo(Route.OBSERVATION_DETAIL) }) {
-            Text(prettyTimestamp(record.createdAt), color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-            Text(record.diagnosis.ifBlank { "Осмотр дерева" }, style = MaterialTheme.typography.titleMedium); StatusBadge(record.status)
-        } }
-    } else {
-        val list = data.notes.filter { it.treeId == vm.tree.id }
-        if (list.isEmpty()) Text("Заметок пока нет.", color = OrchardMuted)
-        list.forEach { item -> OrchardCard { Text(item.text); Text(prettyTimestamp(item.createdAt), color = OrchardMuted, style = MaterialTheme.typography.bodyMedium) } }
-        Field("Новая заметка", note, { note = it.take(2000) }, lines = 3)
-        ErrorBox(ui.error)
-        SecondaryButton("Добавить заметку", enabled = !ui.busy) { vm.addNote(note); if (note.isNotBlank()) note = "" }
+@Composable
+fun TreeScreen(
+    garden: Garden,
+    crop: Crop,
+    tree: Tree,
+    zone: IrrigationZone?,
+    isWatering: Boolean,
+    records: List<Observation>,
+    treeNotes: List<TreeNote>,
+    busy: Boolean = false,
+    error: String? = null,
+    onBack: () -> Unit = {},
+    onBeginInspection: () -> Unit = {},
+    onOpenLabel: () -> Unit = {},
+    onOpenObservationDetail: (String) -> Unit = {},
+    onAddNote: (String) -> Unit = {}
+) {
+    var notes by remember { mutableStateOf(false) }
+    var note by rememberSaveable { mutableStateOf("") }
+
+    LazyScreen {
+        item(key = "header") {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                BackLink("Доска сада", onClick = onBack)
+                Text(
+                    text = "ПАСПОРТ РАСТЕНИЯ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrchardMuted
+                )
+                ScreenTitle(
+                    title = "Дерево ${treeCode(crop, tree)}",
+                    subtitle = "${garden.name} · ряд ${tree.row} · место ${tree.place}"
+                )
+                StatusBadge(tree.status)
+
+                if (isWatering) {
+                    InfoBox(
+                        text = "Демо: действует полив · ${zone?.name}",
+                        icon = R.drawable.ic_droplets
+                    )
+                }
+
+                OrchardCard {
+                    val variety = if (crop.variety.isNotEmpty()) " · ${crop.variety}" else ""
+                    Detail("Культура и сорт", crop.name + variety)
+                    Detail("Год посадки", garden.plantingDate.take(4))
+                    Detail("Зона автополива", zone?.name ?: "Без зоны")
+                    Detail(
+                        label = "Последний осмотр",
+                        value = records.firstOrNull()?.createdAt?.let(::prettyTimestamp)
+                            ?: "Нет сохраненных осмотров"
+                    )
+                }
+
+                PrimaryButton(
+                    text = "Новый осмотр",
+                    icon = R.drawable.ic_camera,
+                    onClick = onBeginInspection
+                )
+                SecondaryButton(
+                    text = "Печать QR",
+                    icon = R.drawable.ic_printer,
+                    onClick = onOpenLabel
+                )
+
+                val latest = records.firstOrNull()
+                if (latest != null && latest.diagnosis.isNotBlank()) {
+                    OrchardCard {
+                        SectionLabel("Последний сохраненный осмотр")
+                        Text(latest.diagnosis, style = MaterialTheme.typography.titleMedium)
+                        Text(latest.recommendations, color = OrchardMuted)
+                        TextButton(onClick = { onOpenObservationDetail(latest.id) }) {
+                            Text("Открыть осмотр")
+                            OrchardIcon(id = R.drawable.ic_arrow_up_right, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                } else {
+                    InfoBox(
+                        text = "ИИ-диагностика по фото: проверьте предполагаемый диагноз и рекомендации, внесите правки и сохраните для дерева.",
+                        icon = R.drawable.ic_scan_eye
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !notes,
+                        onClick = { notes = false },
+                        label = { Text("История") }
+                    )
+                    FilterChip(
+                        selected = notes,
+                        onClick = { notes = true },
+                        label = { Text("Заметки") }
+                    )
+                }
+            }
+        }
+
+        if (!notes) {
+            if (records.isEmpty()) {
+                item(key = "empty_records") {
+                    Text(
+                        text = "История осмотров пока пуста. Новый осмотр появится после сохранения.",
+                        color = OrchardMuted
+                    )
+                }
+            }
+            items(items = records, key = { it.id }) { record ->
+                OrchardCard(modifier = Modifier.clickable { onOpenObservationDetail(record.id) }) {
+                    Text(
+                        text = prettyTimestamp(record.createdAt),
+                        color = OrchardMuted,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = record.diagnosis.ifBlank { "Осмотр дерева" },
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    StatusBadge(record.status)
+                }
+            }
+        } else {
+            if (treeNotes.isEmpty()) {
+                item(key = "empty_notes") {
+                    Text("Заметок пока нет.", color = OrchardMuted)
+                }
+            }
+            items(items = treeNotes, key = { it.id }) { item ->
+                OrchardCard {
+                    Text(item.text)
+                    Text(
+                        text = prettyTimestamp(item.createdAt),
+                        color = OrchardMuted,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+            item(key = "note_form") {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Field(
+                        label = "Новая заметка",
+                        value = note,
+                        onChange = { note = it.take(2000) },
+                        lines = 3
+                    )
+                    ErrorBox(error)
+                    SecondaryButton(
+                        text = "Добавить заметку",
+                        enabled = !busy,
+                        onClick = {
+                            onAddNote(note)
+                            if (note.isNotBlank()) note = ""
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
-@Composable fun ObservationFormScreen(vm: OrchardViewModel, ui: UiState, navController: NavController) {
-    val draft = ui.inspection ?: return
-    var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> if (uri != null) vm.importPhoto(uri) }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success -> if (success) cameraUri?.let { vm.importPhoto(Uri.parse(it)) } }
+@Composable
+fun ObservationFormScreen(
+    crop: Crop,
+    tree: Tree,
+    draft: InspectionDraft?,
+    busy: Boolean = false,
+    error: String? = null,
+    onBack: () -> Unit = {},
+    onUseSamplePhoto: () -> Unit = {},
+    onProvideCameraUri: () -> Uri = { Uri.EMPTY },
+    onCameraCaptured: (Boolean) -> Unit = {},
+    onImportPhoto: (Uri) -> Unit = {},
+    onFail: (String) -> Unit = {},
+    onUpdateDraft: (InspectionDraft) -> Unit = {},
+    onAnalyze: () -> Unit = {},
+    onSaveWithoutAi: () -> Unit = {}
+) {
+    if (draft == null) return
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) onImportPhoto(uri)
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        onCameraCaptured(success)
+    }
     val context = LocalContext.current
-    fun launchCamera() { runCatching { val uri = vm.cameraUri(); cameraUri = uri.toString(); camera.launch(uri) }.onFailure { vm.fail("Камера недоступна. Выберите фотографию из файлов.") } }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) launchCamera() else vm.fail("Разрешение на камеру не выдано. Выберите фото из файлов.") }
-    BackLink("Паспорт дерева") { navController.popBackStack() }
-    Text("${treeCode(vm.crop, vm.tree)} · ряд ${vm.tree.row}, место ${vm.tree.place}", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    ScreenTitle("Новый осмотр", "Фото и наблюдения о выбранном дереве")
+
+    fun launchCamera() {
+        runCatching {
+            val uri = onProvideCameraUri()
+            camera.launch(uri)
+        }.onFailure {
+            onFail("Камера недоступна. Выберите фотографию из файлов.")
+        }
+    }
+
+    val permission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCamera()
+        } else {
+            onFail("Разрешение на камеру не выдано. Выберите фото из файлов.")
+        }
+    }
+
+    BackLink("Паспорт дерева", onClick = onBack)
+    Text(
+        text = "${treeCode(crop, tree)} · ряд ${tree.row}, место ${tree.place}",
+        color = OrchardMuted,
+        style = MaterialTheme.typography.bodyMedium
+    )
+    ScreenTitle(
+        title = "Новый осмотр",
+        subtitle = "Фото и наблюдения о выбранном дереве"
+    )
     PhotoPreview(draft.photoPath, draft.samplePhoto)
+
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { SecondaryButton("Пример фото", R.drawable.ic_image) { vm.useSamplePhoto() } }
-        Box(Modifier.weight(1f)) { SecondaryButton("Загрузить", R.drawable.ic_image_plus) { picker.launch("image/*") } }
+        Box(Modifier.weight(1f)) {
+            SecondaryButton(
+                text = "Пример фото",
+                icon = R.drawable.ic_image,
+                onClick = onUseSamplePhoto
+            )
+        }
+        Box(Modifier.weight(1f)) {
+            SecondaryButton(
+                text = "Загрузить",
+                icon = R.drawable.ic_image_plus,
+                onClick = { picker.launch("image/*") }
+            )
+        }
     }
-    SecondaryButton("Сделать фото", R.drawable.ic_camera) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera() else permission.launch(Manifest.permission.CAMERA)
-    }
-    Text("JPEG / PNG до 10 МБ. Выбранная фотография сохраняется на устройстве.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    Field("Наблюдение", draft.comment, { vm.updateInspection(draft.copy(comment = it.take(3000))); vm.clearFormError() }, lines = 3, placeholder = "Что вы заметили при осмотре?")
-    DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.updateInspection(draft.copy(status = it)); vm.clearFormError() }
-    Text("По умолчанию — прошлое состояние: ${draft.previousStatus.label}.", color = OrchardMuted, style = MaterialTheme.typography.bodyMedium)
-    InfoBox("Демо ИИ: приложение покажет пример предполагаемого диагноза и рекомендаций. Их можно изменить перед сохранением.", R.drawable.ic_scan_eye)
-    ErrorBox(ui.error)
-    PrimaryButton("Отправить фото на анализ", R.drawable.ic_sparkles, !ui.busy) { vm.analyze() }
-    SecondaryButton("Сохранить осмотр без ИИ", enabled = !ui.busy) { vm.saveInspection(false) }
+
+    SecondaryButton(
+        text = "Сделать фото",
+        icon = R.drawable.ic_camera,
+        onClick = {
+            val hasCameraPermission = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasCameraPermission) {
+                launchCamera()
+            } else {
+                permission.launch(Manifest.permission.CAMERA)
+            }
+        }
+    )
+
+    Text(
+        text = "JPEG / PNG до 10 МБ. Выбранная фотография сохраняется на устройстве.",
+        color = OrchardMuted,
+        style = MaterialTheme.typography.bodyMedium
+    )
+    Field(
+        label = "Наблюдение",
+        value = draft.comment,
+        onChange = { onUpdateDraft(draft.copy(comment = it.take(3000))) },
+        lines = 3,
+        placeholder = "Что вы заметили при осмотре?"
+    )
+    DropdownField(
+        label = "Состояние дерева",
+        value = draft.status,
+        options = TreeStatus.entries.map { it to it.label },
+        onSelect = { onUpdateDraft(draft.copy(status = it)) }
+    )
+    Text(
+        text = "По умолчанию — прошлое состояние: ${draft.previousStatus.label}.",
+        color = OrchardMuted,
+        style = MaterialTheme.typography.bodyMedium
+    )
+    InfoBox(
+        text = "Демо ИИ: приложение покажет пример предполагаемого диагноза и рекомендаций. Их можно изменить перед сохранением.",
+        icon = R.drawable.ic_scan_eye
+    )
+    ErrorBox(error)
+    PrimaryButton(
+        text = "Отправить фото на анализ",
+        icon = R.drawable.ic_sparkles,
+        enabled = !busy,
+        onClick = onAnalyze
+    )
+    SecondaryButton(
+        text = "Сохранить осмотр без ИИ",
+        enabled = !busy,
+        onClick = onSaveWithoutAi
+    )
 }
 
-@Composable fun AnalysisScreen(vm: OrchardViewModel, ui: UiState, navController: NavController) {
-    val draft = ui.inspection ?: return
-    BackLink("К осмотру") { vm.backToInspection() }
+@Composable
+fun AnalysisScreen(
+    crop: Crop,
+    tree: Tree,
+    draft: InspectionDraft?,
+    busy: Boolean = false,
+    error: String? = null,
+    onBackToInspection: () -> Unit = {},
+    onUpdateDraft: (InspectionDraft) -> Unit = {},
+    onSaveWithAi: () -> Unit = {}
+) {
+    if (draft == null) return
+
+    BackLink("К осмотру", onClick = onBackToInspection)
     DemoBadge("Демо ИИ")
-    ScreenTitle(if (draft.phase == AnalysisPhase.PROCESSING) "Анализ фотографии" else "Результат анализа", treeCode(vm.crop, vm.tree))
+    ScreenTitle(
+        title = if (draft.phase == AnalysisPhase.PROCESSING) {
+            "Анализ фотографии"
+        } else {
+            "Результат анализа"
+        },
+        subtitle = treeCode(crop, tree)
+    )
     PhotoPreview(draft.photoPath, draft.samplePhoto)
+
     if (draft.phase == AnalysisPhase.PROCESSING) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp); Text("Анализируем фотографию…") }
-        Text("Показывается демонстрационный ответ. Осмотр пока не сохранен, состояние дерева не меняется.", color = OrchardMuted)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp
+            )
+            Text("Анализируем фотографию…")
+        }
+        Text(
+            text = "Показывается демонстрационный ответ. Осмотр пока не сохранен, состояние дерева не меняется.",
+            color = OrchardMuted
+        )
     } else {
-        Field("Предполагаемый диагноз", draft.diagnosis, { vm.updateInspection(draft.copy(diagnosis = it.take(500))); vm.clearFormError() }, lines = 2)
-        Field("Рекомендации", draft.recommendations, { vm.updateInspection(draft.copy(recommendations = it.take(3000))); vm.clearFormError() }, lines = 4)
-        DropdownField("Состояние дерева", draft.status, TreeStatus.entries.map { it to it.label }) { vm.updateInspection(draft.copy(status = it)) }
-        Text("Ответ ИИ не переключает состояние автоматически. По умолчанию использовано прошлое значение.", color = OrchardMuted)
+        Field(
+            label = "Предполагаемый диагноз",
+            value = draft.diagnosis,
+            onChange = { onUpdateDraft(draft.copy(diagnosis = it.take(500))) },
+            lines = 2
+        )
+        Field(
+            label = "Рекомендации",
+            value = draft.recommendations,
+            onChange = { onUpdateDraft(draft.copy(recommendations = it.take(3000))) },
+            lines = 4
+        )
+        DropdownField(
+            label = "Состояние дерева",
+            value = draft.status,
+            options = TreeStatus.entries.map { it to it.label },
+            onSelect = { onUpdateDraft(draft.copy(status = it)) }
+        )
+        Text(
+            text = "Ответ ИИ не переключает состояние автоматически. По умолчанию использовано прошлое значение.",
+            color = OrchardMuted
+        )
+
         var original by remember { mutableStateOf(false) }
-        TextButton({ original = !original }) { Text(if (original) "Скрыть исходный ответ ИИ" else "Исходный ответ ИИ") }
-        if (original) OrchardCard { Text(draft.originalAi?.diagnosis.orEmpty(), style = MaterialTheme.typography.titleMedium); Text(draft.originalAi?.recommendations.orEmpty()) }
-        ErrorBox(ui.error)
-        PrimaryButton("Сохранить для дерева", R.drawable.ic_save, !ui.busy) { vm.saveInspection(true) }
+        TextButton(onClick = { original = !original }) {
+            Text(if (original) "Скрыть исходный ответ ИИ" else "Исходный ответ ИИ")
+        }
+        if (original) {
+            OrchardCard {
+                Text(
+                    text = draft.originalAi?.diagnosis.orEmpty(),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(draft.originalAi?.recommendations.orEmpty())
+            }
+        }
+
+        ErrorBox(error)
+        PrimaryButton(
+            text = "Сохранить для дерева",
+            icon = R.drawable.ic_save,
+            enabled = !busy,
+            onClick = onSaveWithAi
+        )
     }
 }
 
-@Composable fun ObservationDetailScreen(vm: OrchardViewModel, data: AppData, ui: UiState, navController: NavController) {
-    val record = data.observations.find { it.id == ui.selectedObservationId } ?: return
-    BackLink("Паспорт дерева") { vm.openTree(record.treeId) }
-    ScreenTitle("Осмотр дерева", prettyTimestamp(record.createdAt))
+@Composable
+fun ObservationDetailScreen(
+    record: Observation?,
+    onBackToTree: (String) -> Unit = {}
+) {
+    if (record == null) return
+
+    BackLink("Паспорт дерева", onClick = { onBackToTree(record.treeId) })
+    ScreenTitle(
+        title = "Осмотр дерева",
+        subtitle = prettyTimestamp(record.createdAt)
+    )
     StatusBadge(record.status)
-    if (record.samplePhoto || record.photoPath != null) PhotoPreview(record.photoPath, record.samplePhoto)
-    if (record.diagnosis.isNotBlank()) { SectionLabel("Предполагаемый диагноз"); Text(record.diagnosis, style = MaterialTheme.typography.titleLarge); SectionLabel("Рекомендации"); Text(record.recommendations) }
-    if (record.comment.isNotBlank()) { SectionLabel("Наблюдение"); Text(record.comment) }
+
+    if (record.samplePhoto || record.photoPath != null) {
+        PhotoPreview(record.photoPath, record.samplePhoto)
+    }
+
+    if (record.diagnosis.isNotBlank()) {
+        SectionLabel("Предполагаемый диагноз")
+        Text(record.diagnosis, style = MaterialTheme.typography.titleLarge)
+        SectionLabel("Рекомендации")
+        Text(record.recommendations)
+    }
+
+    if (record.comment.isNotBlank()) {
+        SectionLabel("Наблюдение")
+        Text(record.comment)
+    }
+
     record.originalAi?.let { ai ->
         DemoBadge("Демо ИИ · проверено садоводом")
-        Text(if (record.diagnosis != ai.diagnosis || record.recommendations != ai.recommendations) "Внесены правки садовода" else "Ответ сохранен без правок", color = OrchardMuted)
-        OrchardCard { SectionLabel("Исходный ответ ИИ"); Text(ai.diagnosis); Text(ai.recommendations, color = OrchardMuted) }
+        val edited = record.diagnosis != ai.diagnosis ||
+            record.recommendations != ai.recommendations
+        Text(
+            text = if (edited) "Внесены правки садовода" else "Ответ сохранен без правок",
+            color = OrchardMuted
+        )
+        OrchardCard {
+            SectionLabel("Исходный ответ ИИ")
+            Text(ai.diagnosis)
+            Text(ai.recommendations, color = OrchardMuted)
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TreeScreenPreview() {
+    val zone = PreviewSamples.zones.find { PreviewSamples.tree.id in it.treeIds }
+    SmartOrchardTheme {
+        TreeScreen(
+            garden = PreviewSamples.garden,
+            crop = PreviewSamples.crop,
+            tree = PreviewSamples.tree,
+            zone = zone,
+            isWatering = zone != null && zone.id in PreviewSamples.wateringZoneIds,
+            records = PreviewSamples.data.observations
+                .filter { it.treeId == PreviewSamples.tree.id },
+            treeNotes = PreviewSamples.data.notes
+                .filter { it.treeId == PreviewSamples.tree.id }
+        )
     }
 }

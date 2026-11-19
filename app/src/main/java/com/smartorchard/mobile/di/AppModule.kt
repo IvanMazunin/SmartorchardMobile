@@ -2,36 +2,65 @@ package com.smartorchard.mobile.di
 
 import com.smartorchard.mobile.data.OfflineFirstRepository
 import com.smartorchard.mobile.data.OrchardRepository
+import com.smartorchard.mobile.data.sync.SyncScheduler
+import com.smartorchard.mobile.data.sync.WorkManagerSyncScheduler
+import com.smartorchard.mobile.network.ConnectivityNetworkMonitor
+import com.smartorchard.mobile.network.EncryptedTokenStorage
+import com.smartorchard.mobile.network.NetworkMonitor
+import com.smartorchard.mobile.network.TokenStorage
 import com.smartorchard.mobile.services.DemoDiagnosisService
 import com.smartorchard.mobile.services.DiagnosisService
-import com.smartorchard.mobile.services.PhotoStore
-import android.content.Context
+import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import java.time.Clock
+import javax.inject.Qualifier
 import javax.inject.Singleton
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class ApplicationScope
 
 @Module
 @InstallIn(SingletonComponent::class)
-object AppModule {
-
-    /**
-     * Источник данных с оффлайн-поддержкой (Room).
-     * Для переключения на моки:
-     *   fun provideRepository(context: Context): OrchardRepository = MockRepository(context)
-     */
+object CoroutinesModule {
     @Provides
     @Singleton
-    fun provideRepository(offline: OfflineFirstRepository): OrchardRepository = offline
+    @ApplicationScope
+    fun provideApplicationScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @Provides
     @Singleton
-    fun provideDiagnosisService(): DiagnosisService = DemoDiagnosisService()
+    fun provideClock(): Clock = Clock.systemDefaultZone()
+}
 
-    @Provides
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class AppModule {
+
+    @Binds
     @Singleton
-    fun providePhotoStore(@ApplicationContext context: Context): PhotoStore =
-        PhotoStore(context)
+    abstract fun bindRepository(impl: OfflineFirstRepository): OrchardRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindDiagnosisService(impl: DemoDiagnosisService): DiagnosisService
+
+    @Binds
+    @Singleton
+    abstract fun bindNetworkMonitor(impl: ConnectivityNetworkMonitor): NetworkMonitor
+
+    @Binds
+    @Singleton
+    abstract fun bindTokenStorage(impl: EncryptedTokenStorage): TokenStorage
+
+    @Binds
+    @Singleton
+    abstract fun bindSyncScheduler(impl: WorkManagerSyncScheduler): SyncScheduler
 }

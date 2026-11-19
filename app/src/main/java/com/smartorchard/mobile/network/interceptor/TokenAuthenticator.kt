@@ -1,12 +1,18 @@
 package com.smartorchard.mobile.network.interceptor
 
+import com.smartorchard.mobile.di.BaseUrl
+import com.smartorchard.mobile.di.RefreshClient
 import com.smartorchard.mobile.network.TokenManager
 import com.smartorchard.mobile.network.model.AuthResponse
 import com.smartorchard.mobile.network.model.RefreshRequest
 import kotlinx.serialization.json.Json
-import okhttp3.*
+import okhttp3.Authenticator
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.Route
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,14 +23,13 @@ import javax.inject.Singleton
  */
 @Singleton
 class TokenAuthenticator @Inject constructor(
-    private val tokenManager: TokenManager
+    private val tokenManager: TokenManager,
+    @BaseUrl private val baseUrl: String,
+    private val json: Json,
+    @RefreshClient private val refreshClient: OkHttpClient
 ) : Authenticator {
 
     private val lock = Any()
-    private val json = Json { ignoreUnknownKeys = true }
-
-    @Volatile
-    var baseUrl: String = ""  // инжектируется из NetworkModule
 
     override fun authenticate(route: Route?, response: Response): Request? {
         // Защита от бесконечного цикла
@@ -50,7 +55,6 @@ class TokenAuthenticator @Inject constructor(
 
             // Синхронный запрос на обновление токена (отдельный OkHttpClient без авторизации)
             return try {
-                val client = OkHttpClient()
                 val body = json.encodeToString(RefreshRequest.serializer(), RefreshRequest(refreshToken))
                     .toRequestBody("application/json".toMediaType())
                 val refreshRequest = Request.Builder()
@@ -58,21 +62,22 @@ class TokenAuthenticator @Inject constructor(
                     .post(body)
                     .build()
 
-                val refreshResponse = client.newCall(refreshRequest).execute()
-                if (refreshResponse.isSuccessful) {
-                    val responseBody = refreshResponse.body?.string() ?: throw Exception("Empty response")
-                    val auth = json.decodeFromString(AuthResponse.serializer(), responseBody)
-                    tokenManager.accessToken = auth.accessToken
-                    tokenManager.refreshToken = auth.refreshToken
+                refreshClient.newCall(refreshRequest).execute().use { refreshResponse ->
+                    if (refreshResponse.isSuccessful) {
+                        val responseBody = refreshResponse.body.string()
+                        val auth = json.decodeFromString(AuthResponse.serializer(), responseBody)
+                        tokenManager.accessToken = auth.accessToken
+                        tokenManager.refreshToken = auth.refreshToken
 
-                    response.request.newBuilder()
-                        .header("Authorization", "Bearer ${auth.accessToken}")
-                        .build()
-                } else {
-                    tokenManager.clearTokens()
-                    null
+                        response.request.newBuilder()
+                            .header("Authorization", "Bearer ${auth.accessToken}")
+                            .build()
+                    } else {
+                        tokenManager.clearTokens()
+                        null
+                    }
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 tokenManager.clearTokens()
                 null
             }

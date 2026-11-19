@@ -6,19 +6,61 @@ import com.smartorchard.mobile.data.*
 fun CropEntity.toDomain() = Crop(id, name, variety, rowSpacing, treeSpacing, prefix)
 fun Crop.toEntity() = CropEntity(id, name, variety, rowSpacing, treeSpacing, prefix)
 
+// ----- Tree -----
+fun TreeEntity.toDomain() = Tree(
+    id = id,
+    row = row,
+    place = place,
+    status = status
+)
+fun Tree.toEntity(gardenId: String, zoneId: String? = null) = TreeEntity(
+    id = id,
+    gardenId = gardenId,
+    row = row,
+    place = place,
+    status = status,
+    zoneId = zoneId
+)
+
 // ----- Garden -----
-fun GardenEntity.toDomain() = Garden(
-    id, name, cropId, areaHa, plantingDate, placesPerRow, initialTreeCount, trees,
-    Finance(revenueCents, annualRevenueCents, annualCostsCents)
+fun GardenEntity.toDomain(trees: List<Tree>) = Garden(
+    id = id,
+    name = name,
+    cropId = cropId,
+    areaHa = areaHa,
+    plantingDate = plantingDate,
+    placesPerRow = placesPerRow,
+    initialTreeCount = initialTreeCount,
+    trees = trees,
+    finance = Finance(revenueCents, annualRevenueCents, annualCostsCents)
 )
 fun Garden.toEntity() = GardenEntity(
-    id, name, cropId, areaHa, plantingDate, placesPerRow, initialTreeCount, trees,
-    finance.revenueCents, finance.annualRevenueCents, finance.annualCostsCents
+    id = id,
+    name = name,
+    cropId = cropId,
+    areaHa = areaHa,
+    plantingDate = plantingDate,
+    placesPerRow = placesPerRow,
+    initialTreeCount = initialTreeCount,
+    revenueCents = finance.revenueCents,
+    annualRevenueCents = finance.annualRevenueCents,
+    annualCostsCents = finance.annualCostsCents
 )
 
 // ----- Zone -----
-fun ZoneEntity.toDomain() = IrrigationZone(id, gardenId, name, color, treeIds)
-fun IrrigationZone.toEntity() = ZoneEntity(id, gardenId, name, color, treeIds)
+fun ZoneEntity.toDomain(treeIds: List<String>) = IrrigationZone(
+    id = id,
+    gardenId = gardenId,
+    name = name,
+    color = color,
+    treeIds = treeIds
+)
+fun IrrigationZone.toEntity() = ZoneEntity(
+    id = id,
+    gardenId = gardenId,
+    name = name,
+    color = color
+)
 
 // ----- Schedule -----
 fun ScheduleEntity.toDomain() = IrrigationSchedule(id, gardenId, zoneId, start, end)

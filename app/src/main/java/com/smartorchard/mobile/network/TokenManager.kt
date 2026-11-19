@@ -1,31 +1,68 @@
 package com.smartorchard.mobile.network
 
-import android.content.Context
-import android.content.SharedPreferences
-import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+enum class AuthState {
+    AUTHENTICATED,
+    UNAUTHENTICATED
+}
+
 @Singleton
-class TokenManager @Inject constructor(@ApplicationContext context: Context) {
+class TokenManager @Inject constructor(
+    private val storage: TokenStorage
+) {
+    private val lock = Any()
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("smart_orchard_auth", Context.MODE_PRIVATE)
-
-    companion object {
-        private const val KEY_ACCESS = "access_token"
-        private const val KEY_REFRESH = "refresh_token"
-    }
+    private val _authState = MutableStateFlow(
+        if (!storage.getString(KEY_ACCESS).isNullOrBlank()) {
+            AuthState.AUTHENTICATED
+        } else {
+            AuthState.UNAUTHENTICATED
+        }
+    )
+    val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
     var accessToken: String?
-        get() = prefs.getString(KEY_ACCESS, null)
-        set(value) = prefs.edit().putString(KEY_ACCESS, value).apply()
+        get() = synchronized(lock) { storage.getString(KEY_ACCESS) }
+        set(value) = synchronized(lock) {
+            storage.putString(KEY_ACCESS, value)
+            _authState.value = if (!value.isNullOrBlank()) {
+                AuthState.AUTHENTICATED
+            } else {
+                AuthState.UNAUTHENTICATED
+            }
+        }
 
     var refreshToken: String?
-        get() = prefs.getString(KEY_REFRESH, null)
-        set(value) = prefs.edit().putString(KEY_REFRESH, value).apply()
+        get() = synchronized(lock) { storage.getString(KEY_REFRESH) }
+        set(value) = synchronized(lock) {
+            storage.putString(KEY_REFRESH, value)
+        }
 
-    val isLoggedIn: Boolean get() = !accessToken.isNullOrBlank()
+    val isLoggedIn: Boolean
+        get() = !accessToken.isNullOrBlank()
 
-    fun clearTokens() = prefs.edit().remove(KEY_ACCESS).remove(KEY_REFRESH).apply()
+    fun saveTokens(access: String, refresh: String) = synchronized(lock) {
+        storage.putString(KEY_ACCESS, access)
+        storage.putString(KEY_REFRESH, refresh)
+        _authState.value = if (access.isNotBlank()) {
+            AuthState.AUTHENTICATED
+        } else {
+            AuthState.UNAUTHENTICATED
+        }
+    }
+
+    fun clearTokens() = synchronized(lock) {
+        storage.clear()
+        _authState.value = AuthState.UNAUTHENTICATED
+    }
+
+    companion object {
+        const val KEY_ACCESS = "access_token"
+        const val KEY_REFRESH = "refresh_token"
+    }
 }

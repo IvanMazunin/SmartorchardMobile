@@ -2,9 +2,10 @@ package com.smartorchard.mobile.data.local
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.smartorchard.mobile.data.AiResult
-import com.smartorchard.mobile.data.Tree
 import com.smartorchard.mobile.data.TreeStatus
 
 @Entity(tableName = "crops")
@@ -26,19 +27,55 @@ data class GardenEntity(
     @ColumnInfo(name = "planting_date") val plantingDate: String,
     @ColumnInfo(name = "places_per_row") val placesPerRow: Int,
     @ColumnInfo(name = "initial_tree_count") val initialTreeCount: Int,
-    val trees: List<Tree>,
     @ColumnInfo(name = "revenue_cents") val revenueCents: Long = 0,
     @ColumnInfo(name = "annual_revenue_cents") val annualRevenueCents: Long = 0,
     @ColumnInfo(name = "annual_costs_cents") val annualCostsCents: Long = 0
 )
 
-@Entity(tableName = "zones")
+@Entity(
+    tableName = "zones",
+    foreignKeys = [
+        ForeignKey(
+            entity = GardenEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["garden_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("garden_id")]
+)
 data class ZoneEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "garden_id") val gardenId: String,
     val name: String,
-    val color: Int = 0,
-    @ColumnInfo(name = "tree_ids") val treeIds: List<String>
+    val color: Int = 0
+)
+
+@Entity(
+    tableName = "trees",
+    foreignKeys = [
+        ForeignKey(
+            entity = GardenEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["garden_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = ZoneEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["zone_id"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ],
+    indices = [Index("garden_id"), Index("zone_id")]
+)
+data class TreeEntity(
+    @PrimaryKey val id: String,
+    @ColumnInfo(name = "garden_id") val gardenId: String,
+    @ColumnInfo(name = "row_index") val row: Int,
+    val place: Int,
+    val status: TreeStatus = TreeStatus.UNKNOWN,
+    @ColumnInfo(name = "zone_id") val zoneId: String? = null
 )
 
 @Entity(tableName = "schedules")
@@ -91,4 +128,27 @@ data class UserSettingsEntity(
     @PrimaryKey val id: Int = 1,
     @ColumnInfo(name = "current_garden_id") val currentGardenId: String = "",
     @ColumnInfo(name = "printer_device") val printerDevice: String? = null
+)
+
+enum class SyncEntityType {
+    CROP, GARDEN, ZONE, SCHEDULE, EXPENSE, FINANCE, NOTE, OBSERVATION, SETTINGS
+}
+
+enum class SyncOperation {
+    UPSERT, DELETE
+}
+
+@Entity(
+    tableName = "sync_outbox",
+    indices = [Index("created_at")]
+)
+data class SyncOutboxEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "entity_type") val entityType: SyncEntityType,
+    @ColumnInfo(name = "entity_id") val entityId: String,
+    val operation: SyncOperation,
+    @ColumnInfo(name = "payload_json") val payloadJson: String,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "retry_count") val retryCount: Int = 0,
+    @ColumnInfo(name = "last_error") val lastError: String? = null
 )

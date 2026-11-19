@@ -19,7 +19,6 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): OrchardDatabase =
         Room.databaseBuilder(context, OrchardDatabase::class.java, "smartorchard.db")
-            .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 
     @Provides

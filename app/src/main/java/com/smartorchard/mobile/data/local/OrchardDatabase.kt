@@ -8,15 +8,17 @@ import androidx.room.TypeConverters
     entities = [
         CropEntity::class,
         GardenEntity::class,
+        TreeEntity::class,
         ZoneEntity::class,
         ScheduleEntity::class,
         ExpenseEntity::class,
         ObservationEntity::class,
         NoteEntity::class,
-        UserSettingsEntity::class
+        UserSettingsEntity::class,
+        SyncOutboxEntity::class
     ],
     version = 1,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class OrchardDatabase : RoomDatabase() {

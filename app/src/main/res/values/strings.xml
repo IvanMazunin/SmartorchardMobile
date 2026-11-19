@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SmartOrchard</string>
+    <string name="badge_demo_mode">МОКИ</string>
+    <string name="badge_offline">ОФЛАЙН</string>
+    <string name="badge_demo">Демо</string>
+    <string name="badge_demo_ai">Демо ИИ</string>
+    <string name="tab_board">Сад</string>
+    <string name="tab_irrigation">Полив</string>
+    <string name="tab_expenses">Затраты</string>
+    <string name="tab_scan">QR</string>
+    <string name="tab_more">Ещё</string>
+    <string name="dropdown_placeholder">Выберите</string>
+    <string name="prev_rows">Предыдущие ряды</string>
+    <string name="next_rows">Следующие ряды</string>
+    <string name="prev_places">Предыдущие места</string>
+    <string name="next_places">Следующие места</string>
+    <string name="photo_add_prompt">Добавьте фотографию дерева</string>
+    <string name="photo_unavailable">Фотография недоступна</string>
+    <string name="photo_sample_caption">Пример фотографии</string>
+    <string name="photo_inspection_desc">Фотография осмотра</string>
+</resources>

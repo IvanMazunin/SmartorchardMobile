@@ -1,5 +1,6 @@
 package com.smartorchard.mobile.di
 
+import com.smartorchard.mobile.BuildConfig
 import com.smartorchard.mobile.network.api.AuthApi
 import com.smartorchard.mobile.network.api.OrchardApi
 import com.smartorchard.mobile.network.interceptor.AuthInterceptor
@@ -22,9 +23,22 @@ import javax.inject.Singleton
 @Retention(AnnotationRetention.BINARY)
 annotation class BaseUrl
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class RefreshClient
+
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
+
+    private fun createLoggingInterceptor(): HttpLoggingInterceptor =
+        HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BODY
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+        }
 
     // Базовый URL бэкенда — при деплое заменить на реальный адрес
     @Provides
@@ -41,38 +55,42 @@ object NetworkModule {
 
     @Provides
     @Singleton
+    @RefreshClient
+    fun provideRefreshOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor(createLoggingInterceptor())
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+
+    @Provides
+    @Singleton
     fun provideOkHttpClient(
         authInterceptor: AuthInterceptor,
         tokenAuthenticator: TokenAuthenticator
-    ): OkHttpClient {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-        return OkHttpClient.Builder()
+    ): OkHttpClient =
+        OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
-            .addInterceptor(logging)
+            .addInterceptor(createLoggingInterceptor())
             .authenticator(tokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
-    }
 
     @Provides
     @Singleton
     fun provideRetrofit(
         okHttpClient: OkHttpClient,
         json: Json,
-        @BaseUrl baseUrl: String,
-        tokenAuthenticator: TokenAuthenticator
-    ): Retrofit {
-        tokenAuthenticator.baseUrl = baseUrl
-        return Retrofit.Builder()
+        @BaseUrl baseUrl: String
+    ): Retrofit =
+        Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(okHttpClient)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-    }
 
     @Provides
     @Singleton
