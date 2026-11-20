@@ -18,8 +18,16 @@ import com.journeyapps.barcodescanner.ScanOptions
 import com.smartorchard.mobile.R
 import com.smartorchard.mobile.data.*
 import com.smartorchard.mobile.domain.*
+import android.Manifest
+import android.os.Build
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.activity.result.contract.ActivityResultContracts
+import com.smartorchard.mobile.services.PlantLabel
+import com.smartorchard.mobile.services.PrinterStatus
+import com.smartorchard.mobile.services.PairedPrinter
 import com.smartorchard.mobile.services.printQrLabel
-import com.smartorchard.mobile.services.qrBitmap
+import com.smartorchard.mobile.services.renderPlantLabel
 import com.smartorchard.mobile.ui.*
 import com.smartorchard.mobile.ui.theme.*
 
@@ -75,7 +83,7 @@ fun MoreScreen(
         }
     }
 
-    InfoBox("Все данные хранятся на этом устройстве. Сервер, ИИ, Bluetooth-принтер и оборудование полива пока заменены моками.")
+    InfoBox("Все данные хранятся на этом устройстве. Сервер, ИИ и оборудование полива пока заменены моками.")
 }
 
 @Composable
@@ -174,7 +182,8 @@ fun LabelScreen(
     onBack: () -> Unit = {},
     onCopiesChange: (String) -> Unit = {},
     onOpenPrinter: () -> Unit = {},
-    onDemoPrint: () -> Unit = {},
+    busy: Boolean = false,
+    onPrint: (PlantLabel) -> Unit = {},
     onFail: (String) -> Unit = {}
 ) {
     BackLink("Карточка дерева", onClick = onBack)
@@ -184,26 +193,15 @@ fun LabelScreen(
     )
 
     val payload = qrPayload(tree)
-    val bitmap = remember(payload) { qrBitmap(payload).asImageBitmap() }
+    val label = PlantLabel(garden.name, treeCode(crop, tree), tree.row, tree.place, payload)
+    val bitmap = remember(label) { renderPlantLabel(label).asImageBitmap() }
     val context = LocalContext.current
 
     OrchardCard {
-        Text(garden.name, style = MaterialTheme.typography.titleMedium)
         Image(
             bitmap = bitmap,
-            contentDescription = "QR-код ${treeCode(crop, tree)}",
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(230.dp)
-        )
-        Text(
-            text = "Ряд ${tree.row} · место ${tree.place}",
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-        Text(
-            text = payload,
-            style = MaterialTheme.typography.bodyMedium,
-            color = OrchardMuted
+            contentDescription = "${label.garden}, ${label.code}, ряд ${label.row}, место ${label.place}",
+            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)
         )
     }
 
@@ -219,9 +217,10 @@ fun LabelScreen(
         onClick = onOpenPrinter
     )
     PrimaryButton(
-        text = "Печать на демопринтере",
+        text = "Печать на термопринтере",
+        enabled = !busy,
         icon = R.drawable.ic_printer,
-        onClick = onDemoPrint
+        onClick = { onPrint(label) }
     )
     SecondaryButton(
         text = "Системная печать / PDF",
@@ -249,79 +248,57 @@ fun LabelScreen(
     )
 
     ErrorBox(error)
-    InfoBox("Bluetooth работает в деморежиме. Системная печать создаёт настоящий лист с QR-кодами; в диалоге Android можно выбрать «Сохранить как PDF».")
+
 }
 
 @Composable
 fun PrinterScreen(
-    printerDevice: String?,
-    returnToLabel: Boolean = false,
-    printerSearching: Boolean = false,
-    printerSearched: Boolean = false,
-    busy: Boolean = false,
-    error: String? = null,
-    onBack: () -> Unit = {},
-    onSearchPrinters: () -> Unit = {},
-    onConnectPrinter: (String) -> Unit = {},
-    onDisconnectPrinter: () -> Unit = {}
+    status: PrinterStatus,
+    devices: List<PairedPrinter>,
+    returnToLabel: Boolean,
+    printerSearched: Boolean,
+    busy: Boolean,
+    error: String?,
+    onBack: () -> Unit,
+    onSearchPrinters: () -> Unit,
+    onConnectPrinter: (PairedPrinter) -> Unit,
+    onDisconnectPrinter: () -> Unit,
+    onFail: (String) -> Unit
 ) {
-    BackLink(
-        text = if (returnToLabel) "Печать QR" else "Ещё",
-        onClick = onBack
-    )
-    ScreenTitle(
-        title = "Bluetooth-принтер",
-        subtitle = "Этикетки для деревьев"
-    )
-    DemoBadge("Демонстрационный адаптер")
-    InfoBox(
-        text = "Для реальной Bluetooth-печати понадобится адаптер протокола конкретной модели. Сейчас используются виртуальные устройства.",
-        icon = R.drawable.ic_bluetooth
-    )
-
-    if (printerDevice != null) {
+    val context = LocalContext.current
+    val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(
+        Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN
+    ) else emptyArray()
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (permissions.all { result[it] == true }) onSearchPrinters()
+        else onFail("Разрешите доступ к устройствам поблизости в настройках приложения.")
+    }
+    BackLink(if (returnToLabel) "Печать QR" else "Ещё", onClick = onBack)
+    ScreenTitle("Bluetooth-принтер", "Термопринтер TSPL · этикетка 60 × 40 мм")
+    InfoBox("Сначала выполните сопряжение с принтером в настройках Bluetooth телефона.")
+    status.connected?.let { device ->
         OrchardCard {
-            Text(printerDevice, style = MaterialTheme.typography.titleLarge)
-            Text("Подключён · деморежим", color = OrchardGreen)
-            SecondaryButton(
-                text = "Отключить",
-                enabled = !busy,
-                onClick = onDisconnectPrinter
-            )
-            if (returnToLabel) {
-                PrimaryButton(
-                    text = "Вернуться к этикетке",
-                    onClick = onBack
-                )
-            }
+            Text("Подключён: ${device.name}")
+            Text(device.address)
+            SecondaryButton("Отключить", enabled = !busy, onClick = onDisconnectPrinter)
+            if (returnToLabel) PrimaryButton("К этикетке", onClick = onBack)
         }
     }
-
-    PrimaryButton(
-        text = if (printerSearching) "Поиск…" else "Найти демоустройства",
-        icon = R.drawable.ic_search,
-        enabled = !printerSearching,
-        onClick = onSearchPrinters
-    )
-    if (printerSearching) {
-        LinearProgressIndicator(Modifier.fillMaxWidth())
+    status.connecting?.let {
+        Text("Подключение к ${it.name}…")
+        SecondaryButton("Отменить", onClick = onDisconnectPrinter)
     }
-
-    if (printerSearched) {
-        val demoDevices = listOf("Niimbot D110 · DEMO", "Xprinter XP-365B · DEMO")
-        demoDevices.forEach { name ->
-            OrchardCard {
-                Text(name, style = MaterialTheme.typography.titleMedium)
-                SecondaryButton(
-                    text = if (name == printerDevice) "Подключён" else "Подключить",
-                    enabled = !busy && name != printerDevice,
-                    onClick = { onConnectPrinter(name) }
-                )
-            }
+    PrimaryButton("Показать сопряжённые устройства", R.drawable.ic_bluetooth) {
+        if (permissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) onSearchPrinters()
+        else launcher.launch(permissions)
+    }
+    if (printerSearched && devices.isEmpty()) Text("Сопряжённых устройств нет.")
+    devices.forEach { device ->
+        SecondaryButton("${device.name} · ${device.address}", enabled = !busy && status.connecting == null && device != status.connected) {
+            onConnectPrinter(device)
         }
     }
-
-    ErrorBox(error)
+    ErrorBox(error ?: status.error)
 }
 
 @Composable

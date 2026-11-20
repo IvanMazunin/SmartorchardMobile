@@ -4,15 +4,15 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.smartorchard.mobile.data.DemoPrinter
+import com.smartorchard.mobile.services.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.smartorchard.mobile.data.NavRoute
-import com.smartorchard.mobile.data.OrchardRepository
 import com.smartorchard.mobile.domain.toUserMessage
 import com.smartorchard.mobile.domain.usecase.FindTreeUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,13 +21,12 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import kotlin.time.Duration.Companion.milliseconds
 
 @Immutable
 data class ToolsUiState(
     val offlineDemo: Boolean = false,
     val copies: String = "1",
-    val printerSearching: Boolean = false,
+    val pairedDevices: List<PairedPrinter> = emptyList(),
     val printerSearched: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null
@@ -36,7 +35,7 @@ data class ToolsUiState(
 @HiltViewModel
 class ToolsViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
-    private val repository: OrchardRepository,
+    private val printer: PlantPrinter,
     private val stateProvider: ActiveGardenStateProvider,
     private val offlineMode: OfflineModeManager,
     private val snackbarManager: SnackbarManager,
@@ -107,72 +106,46 @@ class ToolsViewModel @Inject constructor(
         _uiState.update { it.copy(copies = copies, error = null) }
     }
 
+    val printerStatus = printer.status
+
     fun searchPrinters() {
-        if (_uiState.value.printerSearching) return
-        _uiState.update { it.copy(printerSearching = true, error = null) }
-        viewModelScope.launch {
-            try {
-                delay(700.milliseconds)
-                _uiState.update { it.copy(printerSearching = false, printerSearched = true) }
-                snackbarManager.show("Найдены демонстрационные устройства")
-            } catch (e: CancellationException) {
-                _uiState.update { it.copy(printerSearching = false) }
-                throw e
-            }
+        try {
+            val devices = printer.pairedDevices()
+            _uiState.update { it.copy(pairedDevices = devices, printerSearched = true, error = null) }
+        } catch (e: Exception) {
+            _uiState.update { it.copy(pairedDevices = emptyList(), printerSearched = false, error = e.message ?: "Bluetooth недоступен.") }
         }
     }
 
-    fun connectPrinter(name: String) {
-        if (_uiState.value.busy) return
-        _uiState.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
-            try {
-                repository.updatePrinter(DemoPrinter(name))
-                _uiState.update { it.copy(busy = false, error = null) }
-                snackbarManager.show("Подключен демопринтер")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _uiState.update { it.copy(busy = false, error = e.toUserMessage()) }
-            } finally {
-                if (_uiState.value.busy) {
-                    _uiState.update { it.copy(busy = false) }
-                }
-            }
-        }
+    fun connectPrinter(device: PairedPrinter) {
+        clearError()
+        try { printer.connect(device) } catch (e: Exception) { fail(e.message ?: "Ошибка подключения.") }
     }
 
     fun disconnectPrinter() {
+        try { printer.disconnect() } catch (e: Exception) { fail(e.message ?: "Ошибка отключения.") }
+    }
+
+    fun printLabel(label: PlantLabel) {
         if (_uiState.value.busy) return
+        val count = _uiState.value.copies.trim().toIntOrNull()
+        if (count == null || count !in 1..12) return fail("Укажите от 1 до 12 копий.")
+        if (printer.status.value.connected == null) {
+            navChannel.trySend(NavEvent.To(NavRoute.Printer(returnToLabel = true)))
+            return
+        }
         _uiState.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
-                repository.updatePrinter(DemoPrinter())
-                _uiState.update { it.copy(busy = false, error = null) }
-                snackbarManager.show("Демопринтер отключен")
+                withContext(Dispatchers.IO) { printer.print(label, count) }
+                snackbarManager.show("Задание передано на печать")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(busy = false, error = e.toUserMessage()) }
+                fail(e.message ?: "Не удалось передать этикетку.")
             } finally {
-                if (_uiState.value.busy) {
-                    _uiState.update { it.copy(busy = false) }
-                }
+                _uiState.update { it.copy(busy = false) }
             }
-        }
-    }
-
-    fun demoPrint() {
-        val count = _uiState.value.copies.trim().toIntOrNull()
-        if (count == null || count !in 1..12) {
-            fail("Укажите от 1 до 12 копий.")
-            return
-        }
-        clearError()
-        if (stateProvider.appData.value.printer.device == null) {
-            navChannel.trySend(NavEvent.To(NavRoute.Printer(returnToLabel = true)))
-        } else {
-            snackbarManager.show("Демо: отправлено $count этикеток. Физическая печать не выполнялась.")
         }
     }
 

@@ -34,6 +34,10 @@ import com.smartorchard.mobile.domain.usecase.SaveZoneUseCase
 import com.smartorchard.mobile.domain.usecase.UpdateFinanceUseCase
 import com.smartorchard.mobile.network.NetworkMonitor
 import com.smartorchard.mobile.services.DiagnosisService
+import com.smartorchard.mobile.services.PairedPrinter
+import com.smartorchard.mobile.services.PlantPrinter
+import com.smartorchard.mobile.services.PrinterStatus
+import com.smartorchard.mobile.services.PlantLabel
 import com.smartorchard.mobile.services.PhotoStore
 import com.smartorchard.mobile.state.ActiveGardenStateProvider
 import com.smartorchard.mobile.state.ExpensesViewModel
@@ -627,15 +631,23 @@ class FeatureViewModelsTest {
     }
 
     @Test
-    fun toolsViewModel_openQrSwitchesGardenAndEmitsTreePassportAndDemoPrintRedirectsWithoutPrinter() = runTest {
+    fun toolsViewModel_openQrSwitchesGardenAndEmitsTreePassportAndPrintUsesLiveConnection() = runTest {
         val repo = FakeOrchardRepository()
         val provider = ActiveGardenStateProvider(repo, backgroundScope)
         val network = FakeNetworkMonitor(initialOnline = true)
         val offlineMode = OfflineModeManager(network, backgroundScope)
         val snackbar = SnackbarManager()
+        var printed: Pair<PlantLabel, Int>? = null
+        val printer = object : PlantPrinter {
+            override val status = MutableStateFlow(PrinterStatus())
+            override fun pairedDevices() = emptyList<PairedPrinter>()
+            override fun connect(device: PairedPrinter) { status.value = PrinterStatus(connected = device) }
+            override fun disconnect() { status.value = PrinterStatus() }
+            override fun print(label: PlantLabel, copies: Int) { printed = label to copies }
+        }
         val vm = ToolsViewModel(
             savedStateHandle = SavedStateHandle(),
-            repository = repo,
+            printer = printer,
             stateProvider = provider,
             offlineMode = offlineMode,
             snackbarManager = snackbar,
@@ -653,21 +665,13 @@ class FeatureViewModelsTest {
         assertEquals(appleGarden.id, repo.data.value.currentGardenId)
         assertEquals(NavEvent.To(NavRoute.TreePassport(targetTree.id)), vm.navEvents.first())
 
-        // demoPrint redirects to Printer(returnToLabel = true) when no printer is connected
-        assertNull(repo.data.value.printer.device)
-        vm.demoPrint()
+        val label = PlantLabel(appleGarden.name, "ЯБ-0101", targetTree.row, targetTree.place, qrPayload(targetTree))
+        vm.printLabel(label)
         assertEquals(NavEvent.To(NavRoute.Printer(returnToLabel = true)), vm.navEvents.first())
-
-        // Once connected, demoPrint shows confirmation snackbar instead of redirecting
-        vm.connectPrinter("Niimbot D110 · DEMO")
-        advanceUntilIdle()
-        assertEquals("Подключен демопринтер", snackbar.messages.first())
-
+        vm.connectPrinter(PairedPrinter("TSPL", "00:11:22:33:44:55"))
         vm.updateCopies("3")
-        vm.demoPrint()
-        assertEquals(
-            "Демо: отправлено 3 этикеток. Физическая печать не выполнялась.",
-            snackbar.messages.first()
-        )
+        vm.printLabel(label)
+        assertEquals("Задание передано на печать", snackbar.messages.first())
+        assertEquals(label to 3, printed)
     }
 }

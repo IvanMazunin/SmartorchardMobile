@@ -44,6 +44,7 @@ ksp {
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21) } }
 
 dependencies {
+    implementation(files("libs/printer-lib-3.2.0.aar"))
     implementation(platform(libs.compose.bom))
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)

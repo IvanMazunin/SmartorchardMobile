@@ -9,6 +9,8 @@ import com.smartorchard.mobile.network.EncryptedTokenStorage
 import com.smartorchard.mobile.network.NetworkMonitor
 import com.smartorchard.mobile.network.TokenStorage
 import com.smartorchard.mobile.services.DemoDiagnosisService
+import com.smartorchard.mobile.services.BluetoothPlantPrinter
+import com.smartorchard.mobile.services.PlantPrinter
 import com.smartorchard.mobile.services.DiagnosisService
 import dagger.Binds
 import dagger.Module
@@ -43,6 +45,9 @@ object CoroutinesModule {
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class AppModule {
+    @Binds
+    abstract fun bindPlantPrinter(impl: BluetoothPlantPrinter): PlantPrinter
+
 
     @Binds
     @Singleton

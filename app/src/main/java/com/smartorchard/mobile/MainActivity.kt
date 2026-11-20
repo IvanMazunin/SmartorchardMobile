@@ -54,6 +54,7 @@ fun OrchardApp(
     val irrigationUi by irrigationVm.uiState.collectAsStateWithLifecycle()
     val wateringZoneIds by irrigationVm.wateringZoneIds.collectAsStateWithLifecycle()
     val expensesUi by expensesVm.uiState.collectAsStateWithLifecycle()
+    val printerStatus by toolsVm.printerStatus.collectAsStateWithLifecycle()
     val toolsUi by toolsVm.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
@@ -511,14 +512,18 @@ fun OrchardApp(
                 composable<NavRoute.Label> { backStackEntry ->
                     val route = backStackEntry.toRoute<NavRoute.Label>()
                     val (treeGarden, treeCrop, tree) = resolveTreeContext(route.treeId)
+                    if (tree.id != route.treeId) {
+                        Text("Дерево не найдено")
+                        return@composable
+                    }
                     ScrollableScreen {
                         LabelScreen(
                             garden = treeGarden,
                             crop = treeCrop,
                             tree = tree,
-                            printerDevice = data.printer.device,
+                            printerDevice = printerStatus.connected?.name,
                             copies = toolsUi.copies,
-                            error = toolsUi.error,
+                            error = toolsUi.error ?: printerStatus.error,
                             onBack = {
                                 toolsVm.clearError()
                                 navController.popBackStack()
@@ -528,7 +533,8 @@ fun OrchardApp(
                                 toolsVm.clearError()
                                 navController.navigate(NavRoute.Printer(returnToLabel = true))
                             },
-                            onDemoPrint = toolsVm::demoPrint,
+                            busy = toolsUi.busy,
+                            onPrint = toolsVm::printLabel,
                             onFail = toolsVm::fail
                         )
                     }
@@ -537,9 +543,9 @@ fun OrchardApp(
                     val route = backStackEntry.toRoute<NavRoute.Printer>()
                     ScrollableScreen {
                         PrinterScreen(
-                            printerDevice = data.printer.device,
+                            status = printerStatus,
                             returnToLabel = route.returnToLabel,
-                            printerSearching = toolsUi.printerSearching,
+                            devices = toolsUi.pairedDevices,
                             printerSearched = toolsUi.printerSearched,
                             busy = toolsUi.busy,
                             error = toolsUi.error,
@@ -547,6 +553,7 @@ fun OrchardApp(
                                 toolsVm.clearError()
                                 navController.popBackStack()
                             },
+                            onFail = toolsVm::fail,
                             onSearchPrinters = toolsVm::searchPrinters,
                             onConnectPrinter = toolsVm::connectPrinter,
                             onDisconnectPrinter = toolsVm::disconnectPrinter
